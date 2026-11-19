@@ -54,6 +54,18 @@ class Sessions:
     def verification_key(digest: str) -> str:
         return "lm:proof-inflight:" + digest
 
+    @staticmethod
+    def result_key(digest: str) -> str:
+        return "lm:proof-outcomes:" + digest
+
+    @staticmethod
+    def result_field(mission_id: str, request_id: str) -> str:
+        return mission_id + ":" + request_id
+
+    # Independent of session inactivity; a crashed worker cannot retain
+    # a mission-wide lock indefinitely while GPS refreshes the session.
+    VERIFY_LEASE_MS = 90_000
+
     def create(self, player_id: str) -> str:
         """Replace an existing gameplay session in one Redis transaction.
 
@@ -72,15 +84,16 @@ class Sessions:
             """
             local old = redis.call('GET', KEYS[1])
             if old then
-                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old, ARGV[5] .. old)
+                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old, ARGV[5] .. old, ARGV[6] .. old)
             end
-            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[6])
-            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[6])
+            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[7])
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[7])
             return 1
             """,
             2, self.player_key(player_id), self.session_key(fingerprint),
             fingerprint, json.dumps(data), "lm:session:",
-            "lm:proof-fingerprints:", "lm:proof-inflight:", INACTIVITY_SECONDS,
+            "lm:proof-fingerprints:", "lm:proof-inflight:",
+            "lm:proof-outcomes:", INACTIVITY_SECONDS,
         )
         return token
 
@@ -139,10 +152,14 @@ class Sessions:
                 if redis.call('EXISTS', KEYS[4]) == 1 then
                     redis.call('EXPIRE', KEYS[4], ARGV[4])
                 end
+                if redis.call('EXISTS', KEYS[5]) == 1 then
+                    redis.call('EXPIRE', KEYS[5], ARGV[4])
+                end
                 return 1
                 """,
-                4, key, self.player_key(data["player_id"]),
+                5, key, self.player_key(data["player_id"]),
                 self.proof_key(fingerprint), self.verification_key(fingerprint),
+                self.result_key(fingerprint),
                 raw, json.dumps(data), fingerprint, INACTIVITY_SECONDS,
             )
             return data if result == 1 else None
@@ -181,45 +198,114 @@ class Sessions:
 
     def claim_verification(self, token: str, player_id: str,
                            mission_id: str, request_id: str) -> bool:
-        """At most one in-flight model call per mission and live SESSION.
+        """Acquire a bounded mission lease with atomic Redis server time.
 
-        A session-bound Redis hash is atomic, expires with its parent session
-        and is removed on logout/replacement. The UUID value is an owner
-        token, so a stale request cannot release another request's lock.
+        The lease expires after 90 seconds even while GPS refreshes the
+        session. It never extends past the session itself. PostgreSQL's
+        unique completion remains the final exactly-once scoring guard.
         """
-        fingerprint = self.digest(token)
+        digest = self.digest(token)
         result = self.redis.eval(
             """
-            local ttl = redis.call('PTTL', KEYS[1])
-            if ttl <= 0 then return -1 end
+            local remaining = redis.call('PTTL', KEYS[1])
+            if remaining <= 0 then return -1 end
             if redis.call('GET', KEYS[2]) ~= ARGV[3] then return -1 end
-            if redis.call('HEXISTS', KEYS[3], ARGV[1]) == 1 then return 0 end
-            redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
-            redis.call('PEXPIRE', KEYS[3], ttl)
+            local clock = redis.call('TIME')
+            local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
+            local old = redis.call('HGET', KEYS[3], ARGV[1])
+            if old then
+                local sep = string.find(old, '|', 1, true)
+                if sep then
+                    local expires = tonumber(string.sub(old, sep + 1))
+                    if expires and expires > now then return 0 end
+                end
+            end
+            local until_ms = now + math.min(remaining, tonumber(ARGV[4]))
+            redis.call('HSET', KEYS[3], ARGV[1],
+                       ARGV[2] .. '|' .. tostring(until_ms))
+            redis.call('PEXPIRE', KEYS[3], remaining)
             return 1
             """,
-            3, self.session_key(fingerprint), self.player_key(player_id),
-            self.verification_key(fingerprint),
-            mission_id, request_id, fingerprint,
+            3, self.session_key(digest), self.player_key(player_id),
+            self.verification_key(digest),
+            mission_id, request_id, digest, self.VERIFY_LEASE_MS,
         )
         if result == -1:
             raise SessionExpired("Session ended before verification")
         return result == 1
 
+    def verification_owner(self, token: str, mission_id: str) -> str | None:
+        """Return active owner UUID, or none for a stale/abandoned worker."""
+        digest = self.digest(token)
+        result = self.redis.eval(
+            """
+            if redis.call('PTTL', KEYS[1]) <= 0 then return false end
+            local old = redis.call('HGET', KEYS[2], ARGV[1])
+            if not old then return false end
+            local sep = string.find(old, '|', 1, true)
+            if not sep then return false end
+            local clock = redis.call('TIME')
+            local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
+            local expiry = tonumber(string.sub(old, sep + 1))
+            if not expiry or expiry <= now then return false end
+            return string.sub(old, 1, sep - 1)
+            """,
+            2, self.session_key(digest), self.verification_key(digest),
+            mission_id,
+        )
+        return result if isinstance(result, str) else None
+
     def release_verification(self, token: str, mission_id: str,
                              request_id: str) -> None:
-        fingerprint = self.digest(token)
+        digest = self.digest(token)
         self.redis.eval(
             """
-            if redis.call('HGET', KEYS[1], ARGV[1]) == ARGV[2] then
+            local old = redis.call('HGET', KEYS[1], ARGV[1])
+            if not old then return 0 end
+            local sep = string.find(old, '|', 1, true)
+            if sep and string.sub(old, 1, sep - 1) == ARGV[2] then
                 redis.call('HDEL', KEYS[1], ARGV[1])
                 return 1
             end
             return 0
             """,
-            1, self.verification_key(fingerprint), mission_id, request_id,
+            1, self.verification_key(digest), mission_id, request_id,
         )
 
+    def get_proof_result(self, token: str, mission_id: str,
+                         request_id: str) -> dict[str, Any] | None:
+        if self.read(token) is None:
+            return None
+        raw = self.redis.hget(
+            self.result_key(self.digest(token)),
+            self.result_field(mission_id, request_id),
+        )
+        return json.loads(raw) if raw else None
+
+    def cache_proof_result(self, token: str, player_id: str,
+                           mission_id: str, request_id: str,
+                           result: dict[str, Any]) -> bool:
+        """Store only a small verdict; never image data or coordinates.
+
+        The cache cannot outlive the authenticated gameplay session.
+        """
+        digest = self.digest(token)
+        saved = self.redis.eval(
+            """
+            local remaining = redis.call('PTTL', KEYS[1])
+            if remaining <= 0 then return 0 end
+            if redis.call('GET', KEYS[2]) ~= ARGV[3] then return 0 end
+            redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
+            redis.call('PEXPIRE', KEYS[3], remaining)
+            return 1
+            """,
+            3, self.session_key(digest), self.player_key(player_id),
+            self.result_key(digest),
+            self.result_field(mission_id, request_id),
+            json.dumps(result, ensure_ascii=False),
+            digest,
+        )
+        return saved == 1
 
     def active_presence(self, limit: int = 500) -> dict:
         """Limited pilot map, batching Redis reads instead of two GETs per user.
@@ -281,7 +367,8 @@ class Sessions:
         raw = self.redis.get(self.session_key(fingerprint))
         if not raw:
             self.redis.delete(
-                self.proof_key(fingerprint), self.verification_key(fingerprint)
+                self.proof_key(fingerprint), self.verification_key(fingerprint),
+                self.result_key(fingerprint),
             )
             return
         try:
@@ -289,20 +376,21 @@ class Sessions:
         except (ValueError, TypeError, KeyError):
             self.redis.delete(
                 self.session_key(fingerprint), self.proof_key(fingerprint),
-                self.verification_key(fingerprint),
+                self.verification_key(fingerprint), self.result_key(fingerprint),
             )
             return
         self.redis.eval(
             """
-            redis.call('DEL', KEYS[1], KEYS[3], KEYS[4])
+            redis.call('DEL', KEYS[1], KEYS[3], KEYS[4], KEYS[5])
             if redis.call('GET', KEYS[2]) == ARGV[1] then
                 redis.call('DEL', KEYS[2])
             end
             return 1
             """,
-            4, self.session_key(fingerprint),
+            5, self.session_key(fingerprint),
             self.player_key(player_id), self.proof_key(fingerprint),
-            self.verification_key(fingerprint), fingerprint,
+            self.verification_key(fingerprint), self.result_key(fingerprint),
+            fingerprint,
         )
 
 
@@ -516,6 +604,28 @@ class GameStore:
                 "AND mission_id=%s AND challenge_day=%s",
                 (UUID(player_id), mission_id, day),
             ).fetchone() is not None
+
+    def awarded_for_request(self, player_id: str, mission_id: UUID,
+                            request_id: UUID) -> dict[str, Any] | None:
+        """Recover a committed score after the HTTP response was lost.
+
+        Deliberately binds the request UUID to the same player and mission;
+        returns neither another player's results nor any proof image.
+        """
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "SELECT points_awarded FROM completions "
+                "WHERE player_id=%s AND mission_id=%s AND request_id=%s",
+                (UUID(player_id), mission_id, request_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "accepted": True,
+                "awarded": True,
+                "points": row["points_awarded"],
+                "reason_he": "המשימה הושלמה והניקוד נשמר",
+            }
 
     def award(self, player_id: str, mission_id: UUID,
               day: date, request_id: UUID) -> dict[str, Any]:
