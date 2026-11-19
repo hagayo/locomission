@@ -9,6 +9,7 @@ from uuid import UUID
 
 INACTIVITY_SECONDS = 180
 MAX_DAILY_MISSIONS = 3
+MISSION_DISCOVERY_RADIUS_M = 10_000  # Not the mission's start/proof radius
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
 

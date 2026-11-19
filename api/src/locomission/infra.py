@@ -13,7 +13,10 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from redis import Redis
 
-from .domain import INACTIVITY_SECONDS, is_session_expired, plausible_movement, validate_coordinate
+from .domain import (
+    INACTIVITY_SECONDS, MAX_DAILY_MISSIONS, MISSION_DISCOVERY_RADIUS_M, distance_m,
+    is_session_expired, plausible_movement, validate_coordinate,
+)
 
 
 class SessionExpired(RuntimeError):
@@ -533,31 +536,40 @@ class GameStore:
                     "SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)",
                     (player_id + day.isoformat(),),
                 )
-                rows = conn.execute(
-                    "SELECT mission_id FROM daily_assignments "
-                    "WHERE player_id=%s AND challenge_day=%s",
-                    (player, day),
-                ).fetchall()
-                if not rows:
+                # Assign stable daily slots as nearby content is discovered.
+                # Do not lock the entire day if the first location has <3.
+                slots = {
+                    row["slot"] for row in conn.execute(
+                        "SELECT slot FROM daily_assignments "
+                        "WHERE player_id=%s AND challenge_day=%s",
+                        (player, day),
+                    ).fetchall()
+                }
+                vacant = [
+                    slot for slot in range(1, MAX_DAILY_MISSIONS + 1)
+                    if slot not in slots
+                ]
+                if vacant:
                     candidates = conn.execute(
                         "SELECT m.id FROM missions m "
                         "WHERE m.status='approved' AND m.content_tier='free' "
+                        # Discovery is not a proof-of-arrival: radius_m and
+                        # accuracy_m are only checked on start/proof endpoints.
                         "AND ST_DWithin(m.location, "
-                        "ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,10000) "
-                        "AND ST_DWithin(m.location, "
-                        "ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,m.radius_m) "
-                        "AND %s <= m.radius_m "
+                        "ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,%s) "
+                        "AND NOT EXISTS (SELECT 1 FROM daily_assignments a "
+                        "WHERE a.player_id=%s AND a.challenge_day=%s "
+                        "AND a.mission_id=m.id) "
                         "AND NOT EXISTS (SELECT 1 FROM completions c "
                         "WHERE c.player_id=%s AND c.mission_id=m.id) "
-                        "ORDER BY md5(m.id::text || %s || %s) LIMIT 3",
+                        "ORDER BY md5(m.id::text || %s || %s) LIMIT %s",
                         (
                             location["lon"], location["lat"],
-                            location["lon"], location["lat"],
-                            location["accuracy_m"], player,
-                            player_id, day.isoformat(),
+                            MISSION_DISCOVERY_RADIUS_M, player, day, player,
+                            player_id, day.isoformat(), len(vacant),
                         ),
                     ).fetchall()
-                    for slot, row in enumerate(candidates, start=1):
+                    for slot, row in zip(vacant, candidates):
                         conn.execute(
                             "INSERT INTO daily_assignments "
                             "(player_id,challenge_day,slot,mission_id) "
