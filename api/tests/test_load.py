@@ -122,6 +122,19 @@ def test_single_flight_race_expiry_and_result_cleanup():
         sessions.release_verification(token, mission_id, *winning)
         assert sessions.verification_owner(token, mission_id) == next_id
 
+        # The same logical request may replay an image after a worker loss,
+        # but may not reuse that image for another mission.
+        same_bytes = b"test-image-fingerprint-no-photo-stored"
+        assert sessions.claim_photo(
+            token, same_bytes, mission_id + ":" + next_id,
+        )[0] is True
+        assert sessions.claim_photo(
+            token, same_bytes, mission_id + ":" + next_id,
+        )[0] is True
+        assert sessions.claim_photo(
+            token, same_bytes, str(uuid4()) + ":" + next_id,
+        )[0] is False
+
         outcome = {
             "accepted": False, "awarded": False, "points": 0,
             "reason_he": "בדיקת עומס",

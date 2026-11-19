@@ -436,7 +436,8 @@ async def submit_proof(
     try:
         try:
             first_use, photo_hash = await run_in_threadpool(
-                app.state.sessions.claim_photo, token, cleaned, str(request_id),
+                app.state.sessions.claim_photo, token, cleaned,
+                str(mission_id) + ':' + str(request_id),
             )
         except SessionExpired:
             raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
