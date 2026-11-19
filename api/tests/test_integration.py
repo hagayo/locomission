@@ -181,9 +181,14 @@ def test_full_solo_and_group_flow(monkeypatch):
         lock_key = app.state.sessions.verification_key(
             app.state.sessions.digest(token)
         )
-        assert 0 < app.state.cache.pttl(lock_key) <= app.state.cache.pttl(
-            app.state.sessions.session_key(app.state.sessions.digest(token))
+        # Compare TTLs in one Redis command: two separate calls can differ
+        # by a millisecond even when the deadlines are identical.
+        lock_ttl, parent_ttl = app.state.cache.eval(
+            "return {redis.call('PTTL', KEYS[1]), redis.call('PTTL', KEYS[2])}",
+            2, lock_key,
+            app.state.sessions.session_key(app.state.sessions.digest(token)),
         )
+        assert 0 < lock_ttl <= parent_ttl
         blocked = submit(group_only)
         assert blocked.status_code == 409
         app.state.sessions.release_verification(token, str(group_only), str(uuid4()))
