@@ -63,3 +63,16 @@ Choose a mapping provider, review its terms and privacy disclosures, and
 configure secure HTTPS before any real-world release. Geolocation on another
 device normally requires HTTPS (localhost is treated as a secure context).
 No fake curated historical missions are inserted for the preview.
+
+
+## Clerk and new mobile experience
+
+The next development client lives in [mobile/](mobile/), separate from the
+old [prototype/](prototype/). Clerk authenticates real accounts, subject to
+configuring your keys locally. The API verifies short-lived Clerk JWTs for
+every player request; gameplay SESSION data remains in Redis.
+
+Run the add-on migration `db/002_clerk_game.sql` after 001. Review
+`docs/CLERK-SETUP.md` for environment-variable placeholders and the
+historical editorial approval process. Three sourced draft mission candidates
+are in `db/003_historical_candidates.sql`, **not yet approved**.

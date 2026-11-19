@@ -26,9 +26,10 @@ def test_full_solo_and_group_flow(monkeypatch):
         "Refuse to initialize an unapproved database"
     )
 
-    schema = (Path(__file__).resolve().parents[2] / "db" / "001_initial.sql").read_text()
+    migrations = Path(__file__).resolve().parents[2] / "db"
     with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute(schema)
+        conn.execute((migrations / "001_initial.sql").read_text())
+        conn.execute((migrations / "002_clerk_game.sql").read_text())
 
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("LOCOMISSION_DEV_MODE", "true")
@@ -120,7 +121,7 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert groups.status_code == 200, groups.text
         assert str(group_id) in {g["id"] for g in groups.json()["groups"]}
 
-        # Not joined yet: group mission cannot be submitted.
+        # Not joined yet: group mission cannot be started or submitted.
         photo_io = io.BytesIO()
         Image.new("RGB", (40, 40), (20, 60, 80)).save(photo_io, format="PNG")
         image_bytes = photo_io.getvalue()
@@ -143,6 +144,18 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert goal_list.status_code == 200, goal_list.text
         assert goal_list.json()["missions"][0]["id"] == str(group_only)
 
+        # Starting an eligible mission is durable and idempotent.
+        started = client.post(
+            "/api/missions/" + str(group_only) + "/start", headers=header
+        )
+        assert started.status_code == 200, started.text
+        assert started.json()["first_start_today"] is True
+        again = client.post(
+            "/api/missions/" + str(group_only) + "/start", headers=header
+        )
+        assert again.json()["first_start_today"] is False
+        assert client.get("/api/me", headers=header).json()["missions_started"] == 1
+
         success = submit(group_only)
         assert success.status_code == 200, success.text
         assert success.json()["awarded"] is True
@@ -157,7 +170,15 @@ def test_full_solo_and_group_flow(monkeypatch):
         duplicate = submit(group_only)
         assert duplicate.status_code == 200, duplicate.text
         assert duplicate.json()["points"] == 0
-        assert client.get("/api/me", headers=header).json()["total_points"] == 7
+        profile = client.get("/api/me", headers=header).json()
+        assert profile["total_points"] == 7
+        assert profile["missions_started"] == 1
+        assert profile["credits_balance"] == 0
+        leaders = client.get("/api/leaderboard").json()["leaders"]
+        assert any(p["total_points"] == 7 for p in leaders)
+        presence = client.get("/api/presence", headers=header).json()["cells"]
+        assert len(presence) >= 1
+        assert presence[0]["lat"] == round(latitude, 3)
 
         with psycopg.connect(database_url) as conn:
             assert conn.execute(
@@ -168,6 +189,7 @@ def test_full_solo_and_group_flow(monkeypatch):
 
         assert client.delete("/api/sessions/current", headers=header).json()["ended"]
         assert app.state.cache.exists(app.state.sessions.proof_key(fingerprint)) == 0
+        assert not client.get("/api/presence", headers=header).status_code == 200
         assert client.get("/api/me", headers=header).status_code == 401
         with psycopg.connect(database_url) as conn:
             assert conn.execute(

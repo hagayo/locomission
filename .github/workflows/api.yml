@@ -1,9 +1,9 @@
 name: API checks
 on:
   push:
-    paths: ["api/**", "db/**", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "mobile/**", ".github/workflows/api.yml"]
   pull_request:
-    paths: ["api/**", "db/**", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "mobile/**", ".github/workflows/api.yml"]
 jobs:
   unit-and-integration:
     runs-on: ubuntu-latest
