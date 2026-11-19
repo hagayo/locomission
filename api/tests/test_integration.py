@@ -197,4 +197,51 @@ def test_full_solo_and_group_flow(monkeypatch):
                 (UUID(os.environ["LOCOMISSION_DEV_PLAYER_ID"]),),
             ).fetchone()[0] == 7
 
+
+    # Clerk identities are mapped to separate durable players, and a
+    # gameplay token alone cannot access another user's account.
+    monkeypatch.setenv("LOCOMISSION_DEV_MODE", "false")
+    identity = {"clerk_id": "user_clerk_test_A"}
+    monkeypatch.setattr("locomission.main.clerk_subject",
+                        lambda req: identity["clerk_id"])
+    with TestClient(app) as client:
+        fake_jwt = {"Authorization": "Bearer verified-by-mock"}
+        no_consent = client.post("/api/sessions", headers=fake_jwt,
+                                 json={"adult_confirmed": False})
+        assert no_consent.status_code == 403
+        a = client.post("/api/sessions", headers=fake_jwt,
+                        json={"adult_confirmed": True})
+        assert a.status_code == 201, a.text
+        a_header = {**fake_jwt, "X-Game-Session": a.json()["session_token"]}
+        a_profile = client.get("/api/me", headers=a_header)
+        assert a_profile.status_code == 200, a_profile.text
+        assert a_profile.json()["credits_balance"] == 0
+        edit = client.patch("/api/me", headers=a_header,
+                            json={"display_name": "בודק אחת"})
+        assert edit.status_code == 200
+        assert edit.json()["display_name"] == "בודק אחת"
+
+        identity["clerk_id"] = "user_clerk_test_B"
+        denied = client.get("/api/me", headers=a_header)
+        assert denied.status_code == 401
+
+        b = client.post("/api/sessions", headers=fake_jwt,
+                        json={"adult_confirmed": True})
+        assert b.status_code == 201
+        b_header = {**fake_jwt, "X-Game-Session": b.json()["session_token"]}
+        b_profile = client.get("/api/me", headers=b_header)
+        assert b_profile.status_code == 200
+        assert b_profile.json()["id"] != a_profile.json()["id"]
+        assert b_profile.json()["total_points"] == 0
+
+        # The same verified Clerk identity reuses its permanent player row.
+        identity["clerk_id"] = "user_clerk_test_A"
+        another = client.post("/api/sessions", headers=fake_jwt,
+                              json={"adult_confirmed": False})
+        assert another.status_code == 201
+        new_header = {**fake_jwt, "X-Game-Session": another.json()["session_token"]}
+        assert client.get("/api/me", headers=new_header).json()["display_name"] == "בודק אחת"
+        assert client.get("/api/me", headers=a_header).status_code == 401
+
     # No live location or photo bytes in durable PostgreSQL by design.
+
