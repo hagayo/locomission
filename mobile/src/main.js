@@ -2,6 +2,7 @@ import { Clerk } from "@clerk/clerk-js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./style.css";
+import { inspectOrRetry } from "./proofRecovery.js";
 
 const $ = (id) => document.getElementById(id);
 const panels = ["setup", "welcome", "browse", "story", "group", "result", "profile"];
@@ -12,7 +13,7 @@ const app = {
   missions: [], groups: [], leaders: [], presence: [],
   tab: "missions", selectedMission: null, selectedGroup: null,
   currentMissionStarted: false, cameFromGroup: false,
-  pins: [], selfMarker: null
+  pins: [], selfMarker: null, pendingProof: null, proofBusy: false
 };
 const apiBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const map = L.map("map", { zoomControl: false }).setView([31.6, 34.85], 8);
@@ -63,7 +64,9 @@ async function request(path, options = {}, gameSession = true) {
       resetGame();
       show("welcome");
     }
-    throw new Error(typeof body.detail === "string" ? body.detail : "לא ניתן להשלים את הפעולה");
+    const error = new Error(typeof body.detail === "string" ? body.detail : "לא ניתן להשלים את הפעולה");
+    error.status = response.status;
+    throw error;
   }
   return body;
 }
@@ -80,6 +83,7 @@ function stopLocation() {
 function resetGame() {
   stopLocation();
   app.session = null; app.playing = false; app.ready = false;
+  app.pendingProof = null; app.proofBusy = false;
   app.reporting = false; app.lastReport = 0; app.focused = false;
   app.location = null; app.missions = []; app.groups = []; app.presence = [];
   app.pins.forEach((p) => p.remove()); app.pins = [];
@@ -308,6 +312,8 @@ async function switchTab(tab) {
   renderBrowse(); renderPins();
 }
 function openMission(mission, fromGroup = false) {
+  // A file remains only in memory until its result is recovered or abandoned.
+  if (app.pendingProof?.missionId !== mission.id) app.pendingProof = null;
   app.selectedMission = mission;
   app.cameFromGroup = fromGroup;
   app.currentMissionStarted = !!mission.started_today;
@@ -326,6 +332,7 @@ function openMission(mission, fromGroup = false) {
   const btn = $("mission-action");
   btn.disabled = !!mission.completed;
   btn.textContent = mission.completed ? "המשימה כבר הושלמה" :
+    app.pendingProof ? "בדוק תוצאה" :
     app.currentMissionStarted ? "צלם הוכחה" : "התחל משימה";
 }
 async function openGroup(group) {
@@ -351,41 +358,83 @@ function renderGroupGoals(goals) {
     mission.points + " נקודות", () => openMission(mission, true)
   );
 }
-async function submitPhoto(file) {
-  if (!file || !app.selectedMission) return;
+function showProofResult(outcome) {
+  app.pendingProof = null; // Release photo bytes from application memory.
+  if (outcome.accepted) app.selectedMission.completed = true;
+  $("result-title").textContent = outcome.accepted ?
+    "המשימה הושלמה" : "צריך ניסיון נוסף";
+  $("result-description").textContent =
+    (outcome.points > 0 ? "+" + outcome.points + " נקודות. " : "") +
+    (outcome.reason_he || "");
+  $("result-next").textContent = outcome.accepted ? "חזרה למפה" : "צלם שוב";
+  $("result-next").onclick = outcome.accepted ? async () => {
+    show("browse"); await refreshGame();
+  } : () => show("story");
+  show("result");
+}
+async function postPendingProof(pending) {
+  return request("/api/missions/" + pending.missionId + "/proof", {
+    method: "POST",
+    headers: {
+      "Content-Type": pending.file.type, "X-Request-ID": pending.requestId
+    },
+    body: pending.file
+  });
+}
+async function handlePendingProof(recover = false) {
+  const pending = app.pendingProof;
+  if (!pending || app.proofBusy || !app.session) return;
+  const initialSession = app.session;
   const button = $("mission-action");
-  button.disabled = true; button.textContent = "בודק את התמונה...";
+  app.proofBusy = true;
+  button.disabled = true;
+  button.textContent = recover ? "בודק את התוצאה..." : "מאמת את התמונה...";
   try {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
-      throw new Error("יש לבחור תמונת JPEG, PNG או WebP");
+    const decision = recover ? await inspectOrRetry(
+      () => request(
+        "/api/missions/" + pending.missionId + "/proof-requests/" + pending.requestId
+      ),
+      () => postPendingProof(pending)
+    ) : { state: "completed", outcome: await postPendingProof(pending) };
+    if (app.session !== initialSession || app.pendingProof !== pending) return;
+    if (decision.state === "processing") {
+      reportError("אימות התמונה עדיין מתבצע. אפשר לבדוק שוב בעוד רגע.");
+      return;
     }
-    if (!file.size || file.size > 5 * 1024 * 1024) {
-      throw new Error("יש לבחור תמונה בגודל עד 5MB");
+    showProofResult(decision.outcome);
+  } catch (error) {
+    if (app.session !== initialSession || app.pendingProof !== pending) return;
+    if ([400, 413, 415, 422].includes(error.status)) {
+      app.pendingProof = null;
+      reportError(error.message);
+    } else {
+      // No second photo is required. The same UUID can be polled and retried.
+      reportError("התקשורת נקטעה או שהאימות לא הושלם. לחץ שוב לבדיקת התוצאה.");
     }
-    const outcome = await request(
-      "/api/missions/" + app.selectedMission.id + "/proof",
-      {
-        method: "POST",
-        headers: { "Content-Type": file.type, "X-Request-ID": crypto.randomUUID() },
-        body: file
-      }
-    );
-    if (outcome.accepted) app.selectedMission.completed = true;
-    $("result-title").textContent = outcome.accepted ?
-      "המשימה הושלמה" : "צריך ניסיון נוסף";
-    $("result-description").textContent =
-      (outcome.points > 0 ? "+" + outcome.points + " נקודות. " : "") +
-      (outcome.reason_he || "");
-    $("result-next").textContent = outcome.accepted ? "חזרה למפה" : "צלם שוב";
-    $("result-next").onclick = outcome.accepted ? async () => {
-      show("browse"); await refreshGame();
-    } : () => show("story");
-    show("result");
-  } catch (err) { reportError(err.message); }
-  finally {
+  } finally {
+    app.proofBusy = false;
     button.disabled = false;
-    button.textContent = app.currentMissionStarted ? "צלם הוכחה" : "התחל משימה";
+    if (app.pendingProof === pending) button.textContent = "בדוק תוצאה";
+    else if (!$("story").hidden) button.textContent =
+      app.currentMissionStarted ? "צלם הוכחה" : "התחל משימה";
   }
+}
+async function submitPhoto(file) {
+  if (!file || !app.selectedMission || app.pendingProof) return;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    reportError("יש לבחור תמונת JPEG, PNG או WebP");
+    return;
+  }
+  if (!file.size || file.size > 5 * 1024 * 1024) {
+    reportError("יש לבחור תמונה בגודל עד 5MB");
+    return;
+  }
+  app.pendingProof = {
+    missionId: app.selectedMission.id,
+    requestId: crypto.randomUUID(),
+    file
+  };
+  await handlePendingProof();
 }
 function showStat(label, value) {
   const element = node("div");
@@ -419,6 +468,7 @@ $("group-back").addEventListener("click", () => { show("browse"); renderBrowse()
 $("profile-back").addEventListener("click", () => { show("browse"); renderBrowse(); });
 $("mission-action").addEventListener("click", async () => {
   if (!app.selectedMission) return;
+  if (app.pendingProof) { await handlePendingProof(true); return; }
   if (app.currentMissionStarted) { $("camera").click(); return; }
   $("mission-action").disabled = true;
   try {
