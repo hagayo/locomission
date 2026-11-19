@@ -17,7 +17,6 @@ from PIL import Image
 )
 def test_full_solo_and_group_flow(monkeypatch):
     import psycopg
-    import redis
     from locomission.main import app
     from locomission.vision import Verdict
 
