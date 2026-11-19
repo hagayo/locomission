@@ -46,3 +46,20 @@ jobs:
         run: python -m compileall -q src
       - name: Unit and PostGIS/Redis integration tests
         run: python -m pytest -q
+
+  mobile-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: JavaScript syntax
+        run: node --check src/main.js
+      - name: Install frontend dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build mobile preview without secrets
+        run: npm run build
