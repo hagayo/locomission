@@ -1,0 +1,23 @@
+name: API checks
+on:
+  push:
+    paths: ["api/**", "db/**", ".github/workflows/api.yml"]
+  pull_request:
+    paths: ["api/**", "db/**", ".github/workflows/api.yml"]
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[test]"
+      - name: Compile
+        run: python -m compileall -q src
+      - name: Test
+        run: python -m pytest -q
