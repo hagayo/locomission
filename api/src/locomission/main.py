@@ -54,7 +54,7 @@ if origins:
         CORSMiddleware,
         allow_origins=origins,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "Content-Type", "X-Game-Session"],
+        allow_headers=["Authorization", "Content-Type", "X-Game-Session", "X-Request-ID"],
         allow_credentials=False,
     )
 
