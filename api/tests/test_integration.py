@@ -134,12 +134,12 @@ def test_full_solo_and_group_flow(monkeypatch):
         Image.new("RGB", (40, 40), (20, 60, 80)).save(photo_io, format="PNG")
         image_bytes = photo_io.getvalue()
 
-        def submit(mission_id):
+        def submit(mission_id, request_id=None):
             return client.post(
                 "/api/missions/" + str(mission_id) + "/proof",
                 content=image_bytes,
                 headers={**header, "Content-Type": "image/png",
-                         "X-Request-ID": str(uuid4())},
+                         "X-Request-ID": str(request_id or uuid4())},
             )
 
         assert submit(group_only).status_code == 404
@@ -178,6 +178,12 @@ def test_full_solo_and_group_flow(monkeypatch):
             token, os.environ["LOCOMISSION_DEV_PLAYER_ID"],
             str(group_only), str(uuid4()),
         ) is False
+        active_status = client.get(
+            "/api/missions/" + str(group_only) + "/proof-requests/" + owner,
+            headers=header,
+        )
+        assert active_status.status_code == 200
+        assert active_status.json()["state"] == "processing"
         lock_key = app.state.sessions.verification_key(
             app.state.sessions.digest(token)
         )
@@ -192,7 +198,9 @@ def test_full_solo_and_group_flow(monkeypatch):
         blocked = submit(group_only)
         assert blocked.status_code == 409
         app.state.sessions.release_verification(token, str(group_only), str(uuid4()))
-        assert app.state.cache.hget(lock_key, str(group_only)) == owner
+        assert app.state.cache.hget(lock_key, str(group_only)).startswith(
+            owner + ":" + owner + "|"
+        )
         app.state.sessions.release_verification(token, str(group_only), owner)
         assert app.state.cache.exists(lock_key) == 0
         assert client.get("/api/me", headers=header).json()["missions_started"] == 1
@@ -211,10 +219,42 @@ def test_full_solo_and_group_flow(monkeypatch):
             content=b"x" * (5 * 1024 * 1024 + 1),
         )
         assert oversize.status_code == 413
-        success = submit(group_only)
+        # A transient model failure must release the lease and photo hash.
+        from locomission.vision import VisionUnavailable
+
+        def upstream_down(*_args):
+            raise VisionUnavailable("Simulated model timeout")
+
+        monkeypatch.setattr("locomission.main.grade_photo", upstream_down)
+        retried_id = uuid4()
+        transient = submit(group_only, retried_id)
+        assert transient.status_code == 503
+        pending_status = client.get(
+            "/api/missions/" + str(group_only) +
+            "/proof-requests/" + str(retried_id),
+            headers=header,
+        )
+        assert pending_status.json()["state"] == "retry_required"
+        monkeypatch.setattr(
+            "locomission.main.grade_photo",
+            lambda *_args: Verdict(True, "תמונה תקינה"),
+        )
+        success = submit(group_only, retried_id)
         assert success.status_code == 200, success.text
         assert success.json()["awarded"] is True
         assert success.json()["points"] == 7
+        # Lost HTTP reply: same UUID recovers exact result with no new model call.
+        recovered = client.get(
+            "/api/missions/" + str(group_only) +
+            "/proof-requests/" + str(retried_id), headers=header,
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["state"] == "completed"
+        assert recovered.json()["points"] == 7
+        replay = submit(group_only, retried_id)
+        assert replay.status_code == 200
+        assert replay.json()["awarded"] is True
+        assert replay.json()["points"] == 7
 
         # Replay fingerprints never outlive their parent session key.
         fingerprint = app.state.sessions.digest(token)
@@ -250,6 +290,7 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert client.delete("/api/sessions/current", headers=header).json()["ended"]
         assert app.state.cache.exists(app.state.sessions.proof_key(fingerprint)) == 0
         assert app.state.cache.exists(app.state.sessions.verification_key(fingerprint)) == 0
+        assert app.state.cache.exists(app.state.sessions.result_key(fingerprint)) == 0
         assert not client.get("/api/presence", headers=header).status_code == 200
         assert client.get("/api/me", headers=header).status_code == 401
         with psycopg.connect(database_url) as conn:
@@ -258,6 +299,113 @@ def test_full_solo_and_group_flow(monkeypatch):
                 (UUID(os.environ["LOCOMISSION_DEV_PLAYER_ID"]),),
             ).fetchone()[0] == 7
 
+
+    # Simulate response loss after a COMMITTED PostgreSQL award but before
+    # the ephemeral Redis result cache was written. The status endpoint
+    # must recover it from PostgreSQL without requiring another model call.
+    solo_id, second_solo = sorted(assigned, key=str)[:2]
+    with TestClient(app) as client:
+        session2 = client.post("/api/sessions")
+        assert session2.status_code == 201
+        token2 = session2.json()["session_token"]
+        h2 = {"Authorization": "Bearer " + token2}
+        assert client.post("/api/location", headers=h2, json={
+            "lat": latitude, "lon": longitude,
+            "accuracy_m": 12, "foreground": True,
+        }).status_code == 200
+        assert client.post(
+            "/api/missions/" + str(solo_id) + "/start", headers=h2,
+        ).status_code == 200
+
+        expected = uuid4()
+        real_cache = app.state.sessions.cache_proof_result
+
+        def simulate_lost_response(*_args):
+            raise RuntimeError("Response interrupted after SQL COMMIT")
+
+        monkeypatch.setattr(
+            app.state.sessions, "cache_proof_result", simulate_lost_response,
+        )
+        with pytest.raises(RuntimeError, match="SQL COMMIT"):
+            client.post(
+                "/api/missions/" + str(solo_id) + "/proof",
+                headers={**h2, "Content-Type": "image/png",
+                         "X-Request-ID": str(expected)},
+                content=image_bytes,
+            )
+        monkeypatch.setattr(
+            app.state.sessions, "cache_proof_result", real_cache,
+        )
+        from_database = client.get(
+            "/api/missions/" + str(solo_id) +
+            "/proof-requests/" + str(expected), headers=h2,
+        )
+        assert from_database.status_code == 200
+        assert from_database.json()["state"] == "completed"
+        assert from_database.json()["points"] == 7
+        same_request = client.post(
+            "/api/missions/" + str(solo_id) + "/proof",
+            headers={**h2, "Content-Type": "image/png",
+                     "X-Request-ID": str(expected)},
+            content=image_bytes,
+        )
+        assert same_request.status_code == 200
+        assert same_request.json()["points"] == 7
+        assert client.get("/api/me", headers=h2).json()["total_points"] == 14
+
+        # An explicit logout mid-model must prevent a new credit.
+        assert client.post(
+            "/api/missions/" + str(second_solo) + "/start", headers=h2,
+        ).status_code == 200
+
+        def disconnect_during_verification(*_args):
+            app.state.sessions.end(token2)
+            return Verdict(True, "תמונה תקינה")
+
+        monkeypatch.setattr(
+            "locomission.main.grade_photo", disconnect_during_verification,
+        )
+        cut_off = client.post(
+            "/api/missions/" + str(second_solo) + "/proof",
+            headers={**h2, "Content-Type": "image/png",
+                     "X-Request-ID": str(uuid4())},
+            content=image_bytes,
+        )
+        assert cut_off.status_code == 401
+        with psycopg.connect(database_url) as db:
+            count = db.execute(
+                "SELECT count(*) FROM completions "
+                "WHERE player_id=%s AND mission_id=%s",
+                (UUID(os.environ["LOCOMISSION_DEV_PLAYER_ID"]), second_solo),
+            ).fetchone()[0]
+            assert count == 0
+        monkeypatch.setattr(
+            "locomission.main.grade_photo",
+            lambda *_args: Verdict(True, "תמונה תקינה"),
+        )
+
+    # The DB uniqueness constraint is the final safety net even when
+    # independent workers attempt to award simultaneously.
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from locomission.domain import challenge_day
+    today = challenge_day(datetime.now(timezone.utc))
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        awards = list(executor.map(
+            lambda i: app.state.game.award(
+                os.environ["LOCOMISSION_DEV_PLAYER_ID"],
+                second_solo, today, uuid4(),
+            ),
+            range(36),
+        ))
+    assert sum(row["points"] for row in awards) == 7
+    assert sum(row["awarded"] for row in awards) == 1
+    with psycopg.connect(database_url) as db:
+        assert db.execute(
+            "SELECT count(*) FROM completions WHERE player_id=%s "
+            "AND mission_id=%s",
+            (UUID(os.environ["LOCOMISSION_DEV_PLAYER_ID"]), second_solo),
+        ).fetchone()[0] == 1
 
     # A replacement SESSION revokes the old token; an old logout is harmless.
     with TestClient(app) as client:
