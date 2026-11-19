@@ -223,6 +223,22 @@ def my_profile(auth: tuple[str, dict] = Depends(identity)):
     return result
 
 
+@app.get("/api/lobby")
+def lobby(auth: tuple[str, dict] = Depends(identity)):
+    """Mobile snapshot: one request for map, assignments, groups and profile."""
+    _, session = auth
+    loc = require_location(session)
+    player_id = session["player_id"]
+    day = challenge_day(utc_now())
+    return {
+        "day_utc": day.isoformat(),
+        "missions": app.state.game.today(player_id, day, loc),
+        "groups": app.state.game.nearby_groups(loc),
+        "profile": app.state.game.profile(player_id),
+        "presence": app.state.sessions.active_presence(),
+    }
+
+
 @app.get("/api/missions/today")
 def today_missions(auth: tuple[str, dict] = Depends(identity)):
     _, session = auth
@@ -287,20 +303,26 @@ async def submit_proof(
     day = challenge_day(utc_now())
     location = require_location(session)
 
-    mission = app.state.game.proof_mission(player_id, mission_id, day, location)
+    mission = await run_in_threadpool(
+        app.state.game.proof_mission, player_id, mission_id, day, location,
+    )
     if mission is None:
         raise HTTPException(status_code=404, detail="המשימה אינה זמינה היום")
     if not mission_is_reachable(
         mission["distance_m"], mission["radius_m"], location["accuracy_m"],
     ):
         raise HTTPException(status_code=403, detail="אינך בתחום המשימה")
-    if not app.state.game.mission_started(player_id, mission_id, day):
+    if not await run_in_threadpool(
+        app.state.game.mission_started, player_id, mission_id, day,
+    ):
         raise HTTPException(status_code=409, detail="יש להתחיל את המשימה לפני הצילום")
-    if app.state.game.completed(player_id, mission_id, day):
+    if await run_in_threadpool(
+        app.state.game.completed, player_id, mission_id, day,
+    ):
         return {"accepted": True, "awarded": False, "points": 0,
                 "reason_he": "כבר קיבלת נקודות על המשימה היום"}
 
-    # No multipart disk-spooling. Only a bounded, raw image request body.
+    # Bounded, raw image body only. Multipart spooling is intentionally disabled.
     from .domain import MAX_PHOTO_BYTES
     media_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
     if media_type not in ("image/jpeg", "image/png", "image/webp"):
@@ -323,47 +345,85 @@ async def submit_proof(
     finally:
         del source
 
+    # Reserve the mission before any billed OpenAI request. Redis serializes
+    # concurrent submissions from the same player/session/mission.
     try:
-        first_use, photo_hash = app.state.sessions.claim_photo(token, cleaned)
+        acquired = await run_in_threadpool(
+            app.state.sessions.claim_verification,
+            token, player_id, str(mission_id), str(request_id),
+        )
     except SessionExpired:
         raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
-    if not first_use:
-        raise HTTPException(status_code=409, detail="התמונה כבר נשלחה ב-SESSION הזה")
+    if not acquired:
+        raise HTTPException(status_code=409, detail="כבר מתבצע אימות למשימה זו")
 
+    photo_hash = None
+    first_use = False
+    finalized = False
     try:
-        verdict = await run_in_threadpool(
-            grade_photo, cleaned, mission["title_he"],
-            mission["instructions_he"], mission["visual_criteria_he"],
+        try:
+            first_use, photo_hash = await run_in_threadpool(
+                app.state.sessions.claim_photo, token, cleaned,
+            )
+        except SessionExpired:
+            raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
+        if not first_use:
+            raise HTTPException(
+                status_code=409, detail="התמונה כבר נשלחה ב-SESSION הזה",
+            )
+
+        try:
+            verdict = await run_in_threadpool(
+                grade_photo, cleaned, mission["title_he"],
+                mission["instructions_he"], mission["visual_criteria_he"],
+            )
+        except VisionUnavailable:
+            raise HTTPException(
+                status_code=503, detail="אימות התמונה אינו זמין כעת",
+            )
+
+        if not verdict.accepted:
+            finalized = True
+            return {"accepted": False, "awarded": False, "points": 0,
+                    "reason_he": verdict.reason_he}
+
+        # Fail closed if the player disconnected or moved during model latency.
+        current = await run_in_threadpool(app.state.sessions.read, token)
+        if current is None:
+            raise HTTPException(
+                status_code=401, detail="ה-SESSION הסתיים בזמן הבדיקה",
+            )
+        latest_location = require_location(current)
+        final_mission = await run_in_threadpool(
+            app.state.game.proof_mission,
+            player_id, mission_id, day, latest_location,
         )
-    except VisionUnavailable:
-        # Permit retry after transient upstream failure; never award points.
-        app.state.sessions.forget_photo(token, photo_hash)
-        raise HTTPException(status_code=503, detail="אימות התמונה אינו זמין כעת")
+        if final_mission is None or not mission_is_reachable(
+            final_mission["distance_m"], final_mission["radius_m"],
+            latest_location["accuracy_m"],
+        ):
+            raise HTTPException(
+                status_code=403, detail="המיקום כבר אינו בתחום המשימה",
+            )
+        result = await run_in_threadpool(
+            app.state.game.award, player_id, mission_id, day, request_id,
+        )
+        finalized = True
+        return {
+            "accepted": True,
+            "awarded": result["awarded"],
+            "points": result["points"],
+            "reason_he": verdict.reason_he if result["awarded"]
+                         else "המשימה כבר זוכתה",
+        }
     finally:
-        del cleaned
-
-    if not verdict.accepted:
-        return {"accepted": False, "awarded": False, "points": 0,
-                "reason_he": verdict.reason_he}
-
-    # Recheck against session expiry and location movement during AI latency.
-    current = app.state.sessions.read(token)
-    if current is None:
-        raise HTTPException(status_code=401, detail="ה-SESSION הסתיים בזמן הבדיקה")
-    latest_location = require_location(current)
-    final_mission = app.state.game.proof_mission(
-        player_id, mission_id, day, latest_location,
-    )
-    if final_mission is None or not mission_is_reachable(
-        final_mission["distance_m"], final_mission["radius_m"],
-        latest_location["accuracy_m"],
-    ):
-        raise HTTPException(status_code=403, detail="המיקום כבר אינו בתחום המשימה")
-    result = app.state.game.award(player_id, mission_id, day, request_id)
-    return {
-        "accepted": True,
-        "awarded": result["awarded"],
-        "points": result["points"],
-        "reason_he": verdict.reason_he if result["awarded"]
-                     else "המשימה כבר זוכתה",
-    }
+        # Upstream timeouts, disconnects and transient database failures
+        # permit a retry with the same photo (without double-scoring).
+        if first_use and photo_hash and not finalized:
+            await run_in_threadpool(
+                app.state.sessions.forget_photo, token, photo_hash,
+            )
+        await run_in_threadpool(
+            app.state.sessions.release_verification,
+            token, str(mission_id), str(request_id),
+        )
