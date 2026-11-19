@@ -36,7 +36,7 @@ A production identity provider has **not** been selected. All player/session cre
 
 Each mission has: a canonical id and slug; original Hebrew fact and directions; named historical source and URL; an approved human reviewer and review time; an indexed PostGIS point and meter radius; visible photo acceptance criteria; integer points; status; and content tier.
 
-Only human-approved missions are eligible for assignment. Three slots per player per UTC calendar day are allocated transactionally at first discovery. If fewer approved nearby missions exist, return fewer and clearly indicate the count. Daily timezone is **provisional**; local-time reset rules are a future product decision.
+Only human-approved missions are eligible for assignment. Up to three slots per player per UTC calendar day are allocated transactionally. Discovery covers approved missions within 10 km, while **starting and verifying** still require the mission-specific geofence and adequate GPS accuracy. If fewer than three missions are available at first discovery, only those slots are occupied; visiting another area later that day may fill the remaining slots without replacing previous assignments. Daily timezone is **provisional**; local-time reset rules are a future product decision.
 
 Image validation has two independent gates:
 
@@ -65,3 +65,16 @@ need field testing to avoid false positives before production use.
 
 Daily discovery excludes missions the player has already completed on earlier
 days; if too few curated local missions are left, fewer than three are shown.
+
+### Nearby anonymous presence overlay
+
+The map requests active player presence within 1 km of the viewing player's
+last foreground location, excluding the viewing player. Redis GEO indexes
+store hashed session identifiers and approximately 100m-grid locations,
+partitioned into 60-second buckets with a finite TTL. The API checks the
+underlying live session, owner binding and exact distance before exposing a
+cell count, never a player identity or precise location. Explicit logout or
+session replacement removes indexed membership. Expired keys become invisible
+immediately on session expiry; GEO bucket TTL provides eventual index cleanup,
+not a defined physical deletion SLA X. Redis GEO cannot represent polar caps;
+valid gameplay GPS there does not create map presence markers.

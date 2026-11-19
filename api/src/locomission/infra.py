@@ -74,6 +74,7 @@ class Sessions:
     PRESENCE_INDEX_TTL_SECONDS = INACTIVITY_SECONDS + PRESENCE_BUCKET_SECONDS
     PRESENCE_RADIUS_M = 1_000
     PRESENCE_MAX_CANDIDATES = 500
+    PRESENCE_MAX_ABS_LAT = 85.0  # Redis GEO excludes the polar caps.
 
     @staticmethod
     def presence_key(bucket: int) -> str:
@@ -160,7 +161,10 @@ class Sessions:
             ):
                 raise SuspiciousLocation("Implausible location jump")
             previous_bucket = data.get("presence_bucket")
-            bucket = int(instant // self.PRESENCE_BUCKET_SECONDS)
+            bucket = (
+                int(instant // self.PRESENCE_BUCKET_SECONDS)
+                if abs(lat) <= self.PRESENCE_MAX_ABS_LAT else None
+            )
             data["last_report"] = instant
             data["location"] = new_location
             data["presence_bucket"] = bucket
@@ -185,16 +189,22 @@ class Sessions:
                 if KEYS[6] ~= KEYS[7] then
                     redis.call('ZREM', KEYS[7], ARGV[3])
                 end
-                redis.call('GEOADD', KEYS[6], ARGV[5], ARGV[6], ARGV[3])
-                redis.call('EXPIRE', KEYS[6], ARGV[7])
+                if ARGV[8] == '1' then
+                    redis.call('GEOADD', KEYS[6], ARGV[5], ARGV[6], ARGV[3])
+                    redis.call('EXPIRE', KEYS[6], ARGV[7])
+                end
                 return 1
                 """,
                 7, key, self.player_key(data["player_id"]),
                 self.proof_key(fingerprint), self.verification_key(fingerprint),
-                self.result_key(fingerprint), self.presence_key(bucket),
-                self.presence_key(previous_bucket if previous_bucket is not None else bucket),
+                self.result_key(fingerprint),
+                self.presence_key(bucket if bucket is not None else -1),
+                self.presence_key(
+                    previous_bucket if previous_bucket is not None else -1
+                ),
                 raw, json.dumps(data), fingerprint, INACTIVITY_SECONDS,
                 round(lon, 3), round(lat, 3), self.PRESENCE_INDEX_TTL_SECONDS,
+                "1" if bucket is not None else "0",
             )
             return data if result == 1 else None
         except SuspiciousLocation:
@@ -360,6 +370,10 @@ class Sessions:
         The current player's marker is deliberately omitted.
         """
         limit = max(1, min(limit, 500))
+        # Gameplay GPS supports all WGS84 latitudes; the presence overlay
+        # is deliberately unavailable beyond Redis GEO's latitude range.
+        if abs(location["lat"]) > self.PRESENCE_MAX_ABS_LAT:
+            return {"cells": [], "truncated": False}
         now = time.time()
         current_bucket = int(now // self.PRESENCE_BUCKET_SECONDS)
         viewer_digest = self.digest(viewer_token)

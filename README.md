@@ -32,7 +32,7 @@ Requires Python 3.12+, PostgreSQL with PostGIS, and Redis. Do not expose the dev
 
 - A SESSION ends after **180 seconds without foreground location reports**, or explicit logout. Account and shared group challenge progress remain.
 - Cleanup upper bound **X has not been chosen**. No guarantee about X is implied.
-- At most **three curated, approved, nearby missions** are assigned per player per UTC day (a provisional daily reset convention).
+- At most **three curated, approved missions within 10 km** are assigned per UTC day. Empty slots fill as the player visits more areas; actual mission start/proof requires reaching its smaller geofence.
 - No score on a failed/duplicate verification.
 - Image analysis uses **GPT-4o mini vision**, not image generation.
 - Clerk authentication is implemented but not verified against a live tenant; billing, native Android, a final privacy policy and live production deployment remain pending.
@@ -96,9 +96,9 @@ operations to prevent a concurrent logout from reviving an ended session.
 ## Mobile gameplay efficiency and proof single-flight
 
 The client fetches `/api/lobby` once per foreground location refresh instead
-of fetching missions, groups, profile and presence separately. Public presence
-still uses coarse anonymous cells and is limited to a pilot-sized scan; Redis
-reads are batched. Historical mission start state is included in each mission
+of fetching missions, groups, profile and presence separately. Presence uses an expiring, geographically searchable Redis GEO index
+rather than scanning every active SESSION. Only nearby anonymous 100m cells
+within 1 km are shown; the viewer's own marker is omitted. Historical mission start state is included in each mission
 response, so returning from the map or phone camera does not reset progress.
 
 Only one photo can be processed for the same mission in a live SESSION at a

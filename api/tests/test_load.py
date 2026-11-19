@@ -240,6 +240,18 @@ def test_local_geo_presence_no_global_scan_and_cleanup(monkeypatch):
             assert sessions.active_presence(viewer, center)["cells"] == []
         finally:
             sessions.end(stale)
+
+        # Redis GEO cannot represent polar caps; a valid GPS report must
+        # still succeed without publishing an incorrect presence marker.
+        polar = sessions.create(identities[3])
+        try:
+            assert sessions.report(polar, 89.0, 20.0, 12)
+            assert sessions.read(polar)["presence_bucket"] is None
+            assert sessions.active_presence(
+                polar, {"lat": 89.0, "lon": 20.0, "accuracy_m": 12}
+            ) == {"cells": [], "truncated": False}
+        finally:
+            sessions.end(polar)
     finally:
         for token in (viewer, near, far, replacement):
             sessions.end(token)
