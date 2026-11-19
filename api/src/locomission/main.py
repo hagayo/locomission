@@ -10,6 +10,7 @@ import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -316,7 +317,7 @@ async def submit_proof(
             raise HTTPException(status_code=413, detail="התמונה גדולה מדי (עד 5MB)")
         source.extend(chunk)
     try:
-        cleaned = normalize_photo(bytes(source))
+        cleaned = await run_in_threadpool(normalize_photo, bytes(source))
     except InvalidPhoto as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
@@ -330,9 +331,9 @@ async def submit_proof(
         raise HTTPException(status_code=409, detail="התמונה כבר נשלחה ב-SESSION הזה")
 
     try:
-        verdict = grade_photo(
-            cleaned, mission["title_he"], mission["instructions_he"],
-            mission["visual_criteria_he"],
+        verdict = await run_in_threadpool(
+            grade_photo, cleaned, mission["title_he"],
+            mission["instructions_he"], mission["visual_criteria_he"],
         )
     except VisionUnavailable:
         # Permit retry after transient upstream failure; never award points.
