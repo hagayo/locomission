@@ -17,7 +17,8 @@ from fastapi.testclient import TestClient
 def test_social_history_avatars_and_group_presence(monkeypatch):
     import psycopg
     from psycopg import sql
-    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from psycopg.conninfo import conninfo_to_dict
+    from urllib.parse import urlsplit, urlunsplit
 
     from locomission.domain import challenge_day
     from locomission.main import app
@@ -27,8 +28,9 @@ def test_social_history_avatars_and_group_presence(monkeypatch):
     attrs = conninfo_to_dict(base_url)
     assert attrs["dbname"] == "locomission_test"
     disposable_name = "lm_social_" + uuid4().hex[:12]
-    admin_url = make_conninfo(**{**attrs, "dbname": "postgres"})
-    social_url = make_conninfo(**{**attrs, "dbname": disposable_name})
+    parsed = urlsplit(base_url)
+    admin_url = urlunsplit(parsed._replace(path="/postgres"))
+    social_url = urlunsplit(parsed._replace(path="/" + disposable_name))
 
     user = uuid4()
     near_user = uuid4()
