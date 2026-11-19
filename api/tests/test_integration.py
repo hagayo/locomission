@@ -129,7 +129,6 @@ def test_full_solo_and_group_flow(monkeypatch):
         def submit(mission_id):
             return client.post(
                 "/api/missions/" + str(mission_id) + "/proof",
-                headers=header,
                 content=image_bytes,
                 headers={**header, "Content-Type": "image/png",
                          "X-Request-ID": str(uuid4())},
