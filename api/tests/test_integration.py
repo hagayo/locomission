@@ -97,7 +97,8 @@ def test_full_solo_and_group_flow(monkeypatch):
             ).fetchone()[0])
     location_a = {"lat": 31.0, "lon": 34.0, "accuracy_m": 350}
     location_b = {"lat": 31.30, "lon": 34.0, "accuracy_m": 15}
-    game = app.state.game
+    from locomission.infra import GameStore
+    game = GameStore(database_url)
     discovered = game.today(str(explorer), day_for_discovery, location_a)
     assert [UUID(m["id"]) for m in discovered] == isolated_missions[:1]
     assert [UUID(m["id"]) for m in game.today(
@@ -121,6 +122,7 @@ def test_full_solo_and_group_flow(monkeypatch):
             "SELECT count(*) FROM daily_assignments WHERE player_id=%s "
             "AND challenge_day=%s", (explorer, day_for_discovery),
         ).fetchone()[0] == 3
+    game.close()
 
     with TestClient(app) as client:
         assert client.get("/api/me").status_code == 401
@@ -339,8 +341,8 @@ def test_full_solo_and_group_flow(monkeypatch):
         leaders = client.get("/api/leaderboard").json()["leaders"]
         assert any(p["total_points"] == 7 for p in leaders)
         presence = client.get("/api/presence", headers=header).json()["cells"]
-        assert len(presence) >= 1
-        assert presence[0]["lat"] == round(latitude, 3)
+        # The own blue map marker is separate; no duplicate red self-marker.
+        assert presence == []
 
         with psycopg.connect(database_url) as conn:
             assert conn.execute(
