@@ -314,7 +314,7 @@ async function switchTab(tab) {
 function openMission(mission, fromGroup = false) {
   app.selectedMission = mission;
   app.cameFromGroup = fromGroup;
-  app.currentMissionStarted = false;
+  app.currentMissionStarted = !!mission.started_today;
   show("story");
   $("story-title").textContent = mission.title_he;
   $("story-fact").textContent = mission.historical_fact_he;
@@ -329,7 +329,8 @@ function openMission(mission, fromGroup = false) {
   for (const criterion of mission.visual_criteria_he) criteria.append(node("li", criterion));
   const btn = $("mission-action");
   btn.disabled = !!mission.completed;
-  btn.textContent = mission.completed ? "המשימה כבר הושלמה" : "התחל משימה";
+  btn.textContent = mission.completed ? "המשימה כבר הושלמה" :
+    app.currentMissionStarted ? "צלם הוכחה" : "התחל משימה";
 }
 async function openGroup(group) {
   app.selectedGroup = group;
@@ -373,6 +374,7 @@ async function submitPhoto(file) {
         body: file
       }
     );
+    if (outcome.accepted) app.selectedMission.completed = true;
     $("result-title").textContent = outcome.accepted ?
       "המשימה הושלמה" : "צריך ניסיון נוסף";
     $("result-description").textContent =
@@ -427,6 +429,7 @@ $("mission-action").addEventListener("click", async () => {
     await request("/api/missions/" + app.selectedMission.id + "/start",
       { method: "POST" });
     app.currentMissionStarted = true;
+    app.selectedMission.started_today = true;
     $("mission-action").textContent = "צלם הוכחה";
   } catch (err) { reportError(err.message); }
   finally { $("mission-action").disabled = false; }

@@ -451,7 +451,10 @@ class GameStore:
                     "SELECT " + self._mission_columns() + ", a.slot, "
                     "EXISTS (SELECT 1 FROM completions c WHERE c.player_id=a.player_id "
                     "AND c.mission_id=a.mission_id AND c.challenge_day=a.challenge_day) "
-                    "AS completed "
+                    "AS completed, "
+                    "EXISTS (SELECT 1 FROM mission_starts ms "
+                    "WHERE ms.player_id=a.player_id AND ms.mission_id=a.mission_id "
+                    "AND ms.challenge_day=a.challenge_day) AS started_today "
                     "FROM daily_assignments a "
                     "JOIN missions m ON m.id=a.mission_id "
                     "WHERE a.player_id=%s AND a.challenge_day=%s "
@@ -588,12 +591,19 @@ class GameStore:
                     (UUID(player_id), group_id),
                 ).fetchone() is not None
 
-    def group_missions(self, player_id: str, group_id: UUID) -> list[dict[str, Any]]:
+    def group_missions(self, player_id: str, group_id: UUID,
+                       day: date) -> list[dict[str, Any]]:
         """Read group goals only after the player voluntarily joined."""
         with self.pool.connection() as conn:
             return conn.execute(
                 "SELECT " + self._mission_columns() + ", "
-                "(gp.mission_id IS NOT NULL) AS completed_by_group "
+                "(gp.mission_id IS NOT NULL) AS completed_by_group, "
+                "EXISTS (SELECT 1 FROM mission_starts ms "
+                "WHERE ms.player_id=mb.player_id AND ms.mission_id=m.id "
+                "AND ms.challenge_day=%s) AS started_today, "
+                "EXISTS (SELECT 1 FROM completions cp "
+                "WHERE cp.player_id=mb.player_id AND cp.mission_id=m.id "
+                "AND cp.challenge_day=%s) AS completed "
                 "FROM group_missions gm "
                 "JOIN missions m ON m.id=gm.mission_id "
                 "JOIN group_challenges g ON g.id=gm.challenge_id "
@@ -605,5 +615,5 @@ class GameStore:
                 "AND now() BETWEEN g.opens_at AND g.closes_at "
                 "AND m.status='approved' AND m.content_tier='free' "
                 "ORDER BY m.slug",
-                (group_id, UUID(player_id)),
+                (day, day, group_id, UUID(player_id)),
             ).fetchall()

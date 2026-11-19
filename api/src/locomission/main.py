@@ -275,7 +275,9 @@ def nearby_groups(auth: tuple[str, dict] = Depends(identity)):
 def group_missions(group_id: UUID, auth: tuple[str, dict] = Depends(identity)):
     _, session = auth
     return {
-        "missions": app.state.game.group_missions(session["player_id"], group_id)
+        "missions": app.state.game.group_missions(
+            session["player_id"], group_id, challenge_day(utc_now())
+        )
     }
 
 
