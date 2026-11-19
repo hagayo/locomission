@@ -168,7 +168,8 @@ class Sessions:
         except (ValueError, TypeError, KeyError):
             return None
 
-    def claim_photo(self, token: str, photo_bytes: bytes) -> tuple[bool, str]:
+    def claim_photo(self, token: str, photo_bytes: bytes,
+                    request_id: str = "") -> tuple[bool, str]:
         """Atomic, session-scoped replay hash, with no stored image bytes."""
         data = self.read(token)
         if data is None:
@@ -180,24 +181,27 @@ class Sessions:
             local ttl = redis.call('PTTL', KEYS[1])
             if ttl <= 0 then return -1 end
             if redis.call('GET', KEYS[2]) ~= ARGV[2] then return -1 end
-            local created = redis.call('SADD', KEYS[3], ARGV[1])
+            local existing = redis.call('HGET', KEYS[3], ARGV[1])
+            if existing and existing ~= ARGV[3] then return 0 end
+            if not existing then redis.call('HSET', KEYS[3], ARGV[1], ARGV[3]) end
             redis.call('PEXPIRE', KEYS[3], ttl)
-            return created
+            return 1
             """,
             3, self.session_key(fingerprint),
             self.player_key(data["player_id"]),
             self.proof_key(fingerprint),
-            photo_hash, fingerprint,
+            photo_hash, fingerprint, request_id,
         )
         if added == -1:
             raise SessionExpired("Session ended before photo claim")
         return bool(added), photo_hash
 
     def forget_photo(self, token: str, photo_hash: str) -> None:
-        self.redis.srem(self.proof_key(self.digest(token)), photo_hash)
+        self.redis.hdel(self.proof_key(self.digest(token)), photo_hash)
 
     def claim_verification(self, token: str, player_id: str,
-                           mission_id: str, request_id: str) -> bool:
+                           mission_id: str, request_id: str,
+                           lease_id: str | None = None) -> bool:
         """Acquire a bounded mission lease with atomic Redis server time.
 
         The lease expires after 90 seconds even while GPS refreshes the
@@ -205,6 +209,7 @@ class Sessions:
         unique completion remains the final exactly-once scoring guard.
         """
         digest = self.digest(token)
+        lease_owner = request_id + ":" + (lease_id or request_id)
         result = self.redis.eval(
             """
             local remaining = redis.call('PTTL', KEYS[1])
@@ -228,7 +233,7 @@ class Sessions:
             """,
             3, self.session_key(digest), self.player_key(player_id),
             self.verification_key(digest),
-            mission_id, request_id, digest, self.VERIFY_LEASE_MS,
+            mission_id, lease_owner, digest, self.VERIFY_LEASE_MS,
         )
         if result == -1:
             raise SessionExpired("Session ended before verification")
@@ -248,7 +253,10 @@ class Sessions:
             local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
             local expiry = tonumber(string.sub(old, sep + 1))
             if not expiry or expiry <= now then return false end
-            return string.sub(old, 1, sep - 1)
+            local owner = string.sub(old, 1, sep - 1)
+            local divider = string.find(owner, ':', 1, true)
+            if not divider then return false end
+            return string.sub(owner, 1, divider - 1)
             """,
             2, self.session_key(digest), self.verification_key(digest),
             mission_id,
@@ -256,8 +264,10 @@ class Sessions:
         return result if isinstance(result, str) else None
 
     def release_verification(self, token: str, mission_id: str,
-                             request_id: str) -> None:
+                             request_id: str,
+                             lease_id: str | None = None) -> None:
         digest = self.digest(token)
+        lease_owner = request_id + ":" + (lease_id or request_id)
         self.redis.eval(
             """
             local old = redis.call('HGET', KEYS[1], ARGV[1])
@@ -269,7 +279,7 @@ class Sessions:
             end
             return 0
             """,
-            1, self.verification_key(digest), mission_id, request_id,
+            1, self.verification_key(digest), mission_id, lease_owner,
         )
 
     def get_proof_result(self, token: str, mission_id: str,
