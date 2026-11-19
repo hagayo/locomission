@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import "./style.css";
 import { inspectOrRetry } from "./proofRecovery.js";
 import { createApiClient } from "./apiClient.js";
+import { createProfileController } from "./profile.js";
 import { AVATARS, avatarGlyph } from "./avatars.js";
 
 const $ = (id) => document.getElementById(id);
@@ -15,8 +16,7 @@ const app = {
   missions: [], groups: [], leaders: [], presence: [],
   tab: "missions", selectedMission: null, selectedGroup: null,
   currentMissionStarted: false, cameFromGroup: false,
-  pins: [], selfMarker: null, pendingProof: null, proofBusy: false,
-  historyCursor: null, historyBusy: false
+  pins: [], selfMarker: null, pendingProof: null, proofBusy: false
 };
 const apiBase = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const map = L.map("map", { zoomControl: false }).setView([31.6, 34.85], 8);
@@ -68,7 +68,7 @@ function resetGame() {
   stopLocation();
   app.session = null; app.playing = false; app.ready = false;
   app.pendingProof = null; app.proofBusy = false;
-  app.historyCursor = null; app.historyBusy = false;
+  profile.reset();
   app.reporting = false; app.lastReport = 0; app.focused = false;
   app.location = null; app.missions = []; app.groups = []; app.presence = [];
   app.pins.forEach((p) => p.remove()); app.pins = [];
@@ -444,111 +444,22 @@ async function submitPhoto(file) {
   };
   await handlePendingProof();
 }
-function showStat(label, value) {
-  const element = node("div");
-  element.append(node("span", label), node("strong", value));
-  $("profile-stats").append(element);
-}
-function renderAvatarOptions(selected) {
-  const picker = $("avatar-options");
-  picker.replaceChildren();
-  for (const preset of AVATARS) {
-    const button = node("button", preset.icon, "avatar-choice");
-    button.type = "button";
-    button.title = preset.name;
-    button.setAttribute("aria-label", preset.name);
-    button.setAttribute("aria-pressed", String(preset.id === selected));
-    button.addEventListener("click", async () => {
-      button.disabled = true;
-      try {
-        const result = await request("/api/me/avatar", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ avatar_id: preset.id })
-        });
-        $("profile-button").textContent = avatarGlyph(result.avatar_id);
-        renderAvatarOptions(result.avatar_id);
-      } catch (err) { reportError(err.message); }
-      finally { button.disabled = false; }
-    });
-    picker.append(button);
-  }
-}
+const profile = createProfileController({
+  request,
+  getSession: () => app.session,
+  node, addEntry, show, reportError, avatarGlyph,
+  avatars: AVATARS,
+  onAvatarChanged: (glyph) => { $("profile-button").textContent = glyph; }
+});
+const openProfile = profile.open;
 
-async function loadAchievements() {
-  const result = await request("/api/me/achievements");
-  const list = $("achievement-list");
-  list.replaceChildren();
-  const achieved = result.achievements.filter((item) => item.unlocked);
-  if (!achieved.length) {
-    list.append(node("p", "ההישג הראשון ייפתח אחרי השלמת משימה.", "helper"));
-  } else {
-    for (const item of achieved) {
-      list.append(node("div", "✓ " + item.title_he, "achievement-entry"));
-    }
-  }
-  const next = result.achievements.find((item) => !item.unlocked);
-  if (next) {
-    list.append(node("p",
-      "הבא: " + next.title_he + " (" + next.current + "/" + next.goal + ")",
-      "helper"));
-  }
-}
-
-async function loadHistory(firstPage = false) {
-  if (app.historyBusy) return;
-  const session = app.session;
-  app.historyBusy = true;
-  $("history-more").disabled = true;
-  try {
-    const params = new URLSearchParams({ limit: "10" });
-    if (!firstPage && app.historyCursor) {
-      params.set("before", app.historyCursor);
-    }
-    const data = await request("/api/me/history?" + params);
-    if (app.session !== session) return;
-    const list = $("history-list");
-    if (firstPage) list.replaceChildren();
-    if (firstPage && !data.items.length) {
-      list.append(node("p", "עדיין לא השלמת משימות.", "helper"));
-    }
-    for (const item of data.items) {
-      const date = new Date(item.completed_at).toLocaleDateString("he-IL");
-      addEntry(list, item.title_he, date, "+" + item.points_awarded + " נקודות", null);
-    }
-    app.historyCursor = data.next_before;
-    $("history-more").hidden = !data.next_before;
-  } catch (err) { reportError(err.message); }
-  finally {
-    app.historyBusy = false;
-    $("history-more").disabled = false;
-  }
-}
-
-async function openProfile() {
-  try {
-    const me = await request("/api/me");
-    show("profile");
-    $("display-name").value = me.display_name;
-    $("profile-button").textContent = avatarGlyph(me.avatar_id);
-    renderAvatarOptions(me.avatar_id);
-    $("profile-stats").replaceChildren();
-    showStat("נקודות משחק", me.total_points);
-    showStat("משימות שהתחלת", me.missions_started);
-    showStat("משימות שהשלמת", me.completed_missions);
-    app.historyCursor = null;
-    $("history-list").replaceChildren();
-    $("achievement-list").replaceChildren();
-    await Promise.all([loadAchievements(), loadHistory(true)]);
-  } catch (err) { reportError(err.message); }
-}
 $("start").addEventListener("click", startPlaying);
 $("tab-missions").addEventListener("click", () => switchTab("missions"));
 $("tab-groups").addEventListener("click", () => switchTab("groups"));
 $("tab-leaders").addEventListener("click", () => switchTab("leaders"));
 $("rank-button").addEventListener("click", () => switchTab("leaders"));
 $("profile-button").addEventListener("click", openProfile);
-$("history-more").addEventListener("click", () => loadHistory());
+
 $("story-back").addEventListener("click", () => {
   if (app.cameFromGroup && app.selectedGroup) openGroup(app.selectedGroup);
   else { show("browse"); renderBrowse(); }
