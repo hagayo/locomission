@@ -130,8 +130,9 @@ def test_full_solo_and_group_flow(monkeypatch):
             return client.post(
                 "/api/missions/" + str(mission_id) + "/proof",
                 headers=header,
-                files={"photo": ("proof.png", image_bytes, "image/png")},
-                data={"request_id": str(uuid4())},
+                content=image_bytes,
+                headers={**header, "Content-Type": "image/png",
+                         "X-Request-ID": str(uuid4())},
             )
 
         assert submit(group_only).status_code == 404
@@ -156,6 +157,20 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert again.json()["first_start_today"] is False
         assert client.get("/api/me", headers=header).json()["missions_started"] == 1
 
+        unsupported = client.post(
+            "/api/missions/" + str(group_only) + "/proof",
+            headers={**header, "Content-Type": "application/octet-stream",
+                     "X-Request-ID": str(uuid4())},
+            content=b"not-a-photo",
+        )
+        assert unsupported.status_code == 415
+        oversize = client.post(
+            "/api/missions/" + str(group_only) + "/proof",
+            headers={**header, "Content-Type": "image/png",
+                     "X-Request-ID": str(uuid4())},
+            content=b"x" * (5 * 1024 * 1024 + 1),
+        )
+        assert oversize.status_code == 413
         success = submit(group_only)
         assert success.status_code == 200, success.text
         assert success.json()["awarded"] is True
@@ -197,6 +212,16 @@ def test_full_solo_and_group_flow(monkeypatch):
                 (UUID(os.environ["LOCOMISSION_DEV_PLAYER_ID"]),),
             ).fetchone()[0] == 7
 
+
+    # A replacement SESSION revokes the old token; an old logout is harmless.
+    with TestClient(app) as client:
+        first = client.post("/api/sessions").json()["session_token"]
+        second = client.post("/api/sessions").json()["session_token"]
+        assert app.state.sessions.read(first) is None
+        app.state.sessions.end(first)
+        assert app.state.sessions.read(second) is not None
+        app.state.sessions.end(second)
+        assert app.state.sessions.report(second, latitude, longitude, 10) is None
 
     # Clerk identities are mapped to separate durable players, and a
     # gameplay token alone cannot access another user's account.

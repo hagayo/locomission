@@ -139,6 +139,8 @@ class Sessions:
                 raw, json.dumps(data), fingerprint, INACTIVITY_SECONDS,
             )
             return data if result == 1 else None
+        except SuspiciousLocation:
+            raise
         except (ValueError, TypeError, KeyError):
             return None
 

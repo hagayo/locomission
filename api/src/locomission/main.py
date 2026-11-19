@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import UUID
 
 import redis
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -275,10 +275,10 @@ def join_group(group_id: UUID, auth: tuple[str, dict] = Depends(identity)):
 
 
 @app.post("/api/missions/{mission_id}/proof")
-def submit_proof(
+async def submit_proof(
     mission_id: UUID,
-    photo: UploadFile = File(...),
-    request_id: UUID = Form(...),
+    request: Request,
+    request_id: UUID = Header(alias="X-Request-ID"),
     auth: tuple[str, dict] = Depends(identity),
 ):
     token, session = auth
@@ -299,14 +299,27 @@ def submit_proof(
         return {"accepted": True, "awarded": False, "points": 0,
                 "reason_he": "כבר קיבלת נקודות על המשימה היום"}
 
+    # No multipart disk-spooling. Only a bounded, raw image request body.
     from .domain import MAX_PHOTO_BYTES
-    source = photo.file.read(MAX_PHOTO_BYTES + 1)
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    if media_type not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(status_code=415, detail="נדרשת תמונת JPEG, PNG או WebP")
     try:
-        cleaned = normalize_photo(source)
+        declared = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="גודל קובץ אינו תקין")
+    if declared > MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="התמונה גדולה מדי (עד 5MB)")
+    source = bytearray()
+    async for chunk in request.stream():
+        if len(source) + len(chunk) > MAX_PHOTO_BYTES:
+            raise HTTPException(status_code=413, detail="התמונה גדולה מדי (עד 5MB)")
+        source.extend(chunk)
+    try:
+        cleaned = normalize_photo(bytes(source))
     except InvalidPhoto as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
-        photo.file.close()
         del source
 
     try:

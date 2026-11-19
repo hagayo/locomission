@@ -359,12 +359,19 @@ async function submitPhoto(file) {
   const button = $("mission-action");
   button.disabled = true; button.textContent = "בודק את התמונה...";
   try {
-    const body = new FormData();
-    body.set("request_id", crypto.randomUUID());
-    body.set("photo", file, file.name);
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      throw new Error("יש לבחור תמונת JPEG, PNG או WebP");
+    }
+    if (!file.size || file.size > 5 * 1024 * 1024) {
+      throw new Error("יש לבחור תמונה בגודל עד 5MB");
+    }
     const outcome = await request(
       "/api/missions/" + app.selectedMission.id + "/proof",
-      { method: "POST", body }
+      {
+        method: "POST",
+        headers: { "Content-Type": file.type, "X-Request-ID": crypto.randomUUID() },
+        body: file
+      }
     );
     $("result-title").textContent = outcome.accepted ?
       "המשימה הושלמה" : "צריך ניסיון נוסף";
