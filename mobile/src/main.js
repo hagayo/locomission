@@ -3,6 +3,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "./style.css";
 import { inspectOrRetry } from "./proofRecovery.js";
+import { createApiClient } from "./apiClient.js";
 import { AVATARS, avatarGlyph } from "./avatars.js";
 
 const $ = (id) => document.getElementById(id);
@@ -49,34 +50,15 @@ function addEntry(container, title, detail, end, onClick) {
   if (onClick) element.addEventListener("click", onClick);
   container.append(element);
 }
-async function request(path, options = {}, gameSession = true) {
-  if (!app.clerk?.session) throw new Error("נדרשת התחברות ל-Clerk");
-  const jwt = await app.clerk.session.getToken();
-  if (!jwt) throw new Error("ההתחברות הסתיימה, יש להתחבר מחדש");
-  const headers = new Headers(options.headers || {});
-  headers.set("Authorization", "Bearer " + jwt);
-  if (gameSession && app.session) headers.set("X-Game-Session", app.session);
-  const response = await fetch(apiBase + path, {
-    ...options, headers, cache: "no-store"
-  });
-  let body = {};
-  try { body = await response.json(); } catch { /* sanitized fallback */ }
-  if (!response.ok) {
-    if (response.status === 401 && gameSession) {
-      resetGame();
-      show("welcome");
-    }
-    const error = new Error(typeof body.detail === "string" ? body.detail : "לא ניתן להשלים את הפעולה");
-    error.status = response.status;
-    throw error;
-  }
-  return body;
-}
-async function publicRequest(path) {
-  const response = await fetch(apiBase + path, { cache: "no-store" });
-  if (!response.ok) throw new Error("לא ניתן לטעון כרגע נתונים");
-  return response.json();
-}
+const api = createApiClient({
+  baseUrl: apiBase,
+  getClerkSession: () => app.clerk?.session,
+  getGameSession: () => app.session,
+  onSessionExpired: () => { resetGame(); show("welcome"); }
+});
+const request = api.request;
+const publicRequest = api.publicRequest;
+
 function stopLocation() {
   if (app.watch !== null) navigator.geolocation.clearWatch(app.watch);
   if (app.interval !== null) clearInterval(app.interval);
