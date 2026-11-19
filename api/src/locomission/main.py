@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import redis
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -293,6 +293,33 @@ def join_group(group_id: UUID, auth: tuple[str, dict] = Depends(identity)):
     return {"joined": True}
 
 
+@app.get("/api/missions/{mission_id}/proof-requests/{request_id}")
+def proof_request_status(
+    mission_id: UUID,
+    request_id: UUID,
+    auth: tuple[str, dict] = Depends(identity),
+):
+    """Recover a verdict after the mobile network dropped the HTTP response.
+
+    Responses are scoped to the current authenticated player and game session.
+    Photo bytes are not held or persisted for retrieval.
+    """
+    token, session = auth
+    mission = str(mission_id)
+    logical_id = str(request_id)
+    cached = app.state.sessions.get_proof_result(token, mission, logical_id)
+    if cached is not None:
+        return {"state": "completed", **cached}
+    awarded = app.state.game.awarded_for_request(
+        session["player_id"], mission_id, request_id,
+    )
+    if awarded is not None:
+        return {"state": "completed", **awarded}
+    if app.state.sessions.verification_owner(token, mission) == logical_id:
+        return {"state": "processing"}
+    return {"state": "retry_required"}
+
+
 @app.post("/api/missions/{mission_id}/proof")
 async def submit_proof(
     mission_id: UUID,
@@ -303,6 +330,20 @@ async def submit_proof(
     token, session = auth
     player_id = session["player_id"]
     day = challenge_day(utc_now())
+    # Same logical request may be retried after a lost response, without
+    # decoding/uploading again or invoking the paid model twice.
+    cached = await run_in_threadpool(
+        app.state.sessions.get_proof_result,
+        token, str(mission_id), str(request_id),
+    )
+    if cached is not None:
+        return cached
+    persisted = await run_in_threadpool(
+        app.state.game.awarded_for_request,
+        player_id, mission_id, request_id,
+    )
+    if persisted is not None:
+        return persisted
     location = require_location(session)
 
     mission = await run_in_threadpool(
@@ -349,10 +390,11 @@ async def submit_proof(
 
     # Reserve the mission before any billed OpenAI request. Redis serializes
     # concurrent submissions from the same player/session/mission.
+    lease_id = uuid4().hex
     try:
         acquired = await run_in_threadpool(
             app.state.sessions.claim_verification,
-            token, player_id, str(mission_id), str(request_id),
+            token, player_id, str(mission_id), str(request_id), lease_id,
         )
     except SessionExpired:
         raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
@@ -365,7 +407,7 @@ async def submit_proof(
     try:
         try:
             first_use, photo_hash = await run_in_threadpool(
-                app.state.sessions.claim_photo, token, cleaned,
+                app.state.sessions.claim_photo, token, cleaned, str(request_id),
             )
         except SessionExpired:
             raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
@@ -385,9 +427,18 @@ async def submit_proof(
             )
 
         if not verdict.accepted:
+            outcome = {"accepted": False, "awarded": False, "points": 0,
+                       "reason_he": verdict.reason_he}
+            stored = await run_in_threadpool(
+                app.state.sessions.cache_proof_result,
+                token, player_id, str(mission_id), str(request_id), outcome,
+            )
+            if not stored:
+                raise HTTPException(
+                    status_code=401, detail="ה-SESSION הסתיים בזמן הבדיקה",
+                )
             finalized = True
-            return {"accepted": False, "awarded": False, "points": 0,
-                    "reason_he": verdict.reason_he}
+            return outcome
 
         # Fail closed if the player disconnected or moved during model latency.
         current = await run_in_threadpool(app.state.sessions.read, token)
@@ -410,14 +461,21 @@ async def submit_proof(
         result = await run_in_threadpool(
             app.state.game.award, player_id, mission_id, day, request_id,
         )
-        finalized = True
-        return {
+        outcome = {
             "accepted": True,
             "awarded": result["awarded"],
             "points": result["points"],
             "reason_he": verdict.reason_he if result["awarded"]
                          else "המשימה כבר זוכתה",
         }
+        # Cache is an optimization only. If the worker dies after the DB
+        # commit, GET status can recover the authoritative DB award.
+        await run_in_threadpool(
+            app.state.sessions.cache_proof_result,
+            token, player_id, str(mission_id), str(request_id), outcome,
+        )
+        finalized = True
+        return outcome
     finally:
         # Upstream timeouts, disconnects and transient database failures
         # permit a retry with the same photo (without double-scoring).
@@ -427,5 +485,5 @@ async def submit_proof(
             )
         await run_in_threadpool(
             app.state.sessions.release_verification,
-            token, str(mission_id), str(request_id),
+            token, str(mission_id), str(request_id), lease_id,
         )
