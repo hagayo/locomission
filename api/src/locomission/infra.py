@@ -50,6 +50,10 @@ class Sessions:
     def proof_key(digest: str) -> str:
         return "lm:proof-fingerprints:" + digest
 
+    @staticmethod
+    def verification_key(digest: str) -> str:
+        return "lm:proof-inflight:" + digest
+
     def create(self, player_id: str) -> str:
         """Replace an existing gameplay session in one Redis transaction.
 
@@ -68,15 +72,15 @@ class Sessions:
             """
             local old = redis.call('GET', KEYS[1])
             if old then
-                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old)
+                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old, ARGV[5] .. old)
             end
-            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[5])
-            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[5])
+            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[6])
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[6])
             return 1
             """,
             2, self.player_key(player_id), self.session_key(fingerprint),
             fingerprint, json.dumps(data), "lm:session:",
-            "lm:proof-fingerprints:", INACTIVITY_SECONDS,
+            "lm:proof-fingerprints:", "lm:proof-inflight:", INACTIVITY_SECONDS,
         )
         return token
 
@@ -132,10 +136,13 @@ class Sessions:
                 if redis.call('EXISTS', KEYS[3]) == 1 then
                     redis.call('EXPIRE', KEYS[3], ARGV[4])
                 end
+                if redis.call('EXISTS', KEYS[4]) == 1 then
+                    redis.call('EXPIRE', KEYS[4], ARGV[4])
+                end
                 return 1
                 """,
-                3, key, self.player_key(data["player_id"]),
-                self.proof_key(fingerprint),
+                4, key, self.player_key(data["player_id"]),
+                self.proof_key(fingerprint), self.verification_key(fingerprint),
                 raw, json.dumps(data), fingerprint, INACTIVITY_SECONDS,
             )
             return data if result == 1 else None
@@ -171,6 +178,48 @@ class Sessions:
 
     def forget_photo(self, token: str, photo_hash: str) -> None:
         self.redis.srem(self.proof_key(self.digest(token)), photo_hash)
+
+    def claim_verification(self, token: str, player_id: str,
+                           mission_id: str, request_id: str) -> bool:
+        """At most one in-flight model call per mission and live SESSION.
+
+        A session-bound Redis hash is atomic, expires with its parent session
+        and is removed on logout/replacement. The UUID value is an owner
+        token, so a stale request cannot release another request's lock.
+        """
+        fingerprint = self.digest(token)
+        result = self.redis.eval(
+            """
+            local ttl = redis.call('PTTL', KEYS[1])
+            if ttl <= 0 then return -1 end
+            if redis.call('GET', KEYS[2]) ~= ARGV[3] then return -1 end
+            if redis.call('HEXISTS', KEYS[3], ARGV[1]) == 1 then return 0 end
+            redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
+            redis.call('PEXPIRE', KEYS[3], ttl)
+            return 1
+            """,
+            3, self.session_key(fingerprint), self.player_key(player_id),
+            self.verification_key(fingerprint),
+            mission_id, request_id, fingerprint,
+        )
+        if result == -1:
+            raise SessionExpired("Session ended before verification")
+        return result == 1
+
+    def release_verification(self, token: str, mission_id: str,
+                             request_id: str) -> None:
+        fingerprint = self.digest(token)
+        self.redis.eval(
+            """
+            if redis.call('HGET', KEYS[1], ARGV[1]) == ARGV[2] then
+                redis.call('HDEL', KEYS[1], ARGV[1])
+                return 1
+            end
+            return 0
+            """,
+            1, self.verification_key(fingerprint), mission_id, request_id,
+        )
+
 
     def active_presence(self, limit: int = 500) -> dict:
         """Public 100-ish-meter coarse cells, no player identifiers.
@@ -212,24 +261,29 @@ class Sessions:
         fingerprint = self.digest(token)
         raw = self.redis.get(self.session_key(fingerprint))
         if not raw:
-            self.redis.delete(self.proof_key(fingerprint))
+            self.redis.delete(
+                self.proof_key(fingerprint), self.verification_key(fingerprint)
+            )
             return
         try:
             player_id = json.loads(raw)["player_id"]
         except (ValueError, TypeError, KeyError):
-            self.redis.delete(self.session_key(fingerprint), self.proof_key(fingerprint))
+            self.redis.delete(
+                self.session_key(fingerprint), self.proof_key(fingerprint),
+                self.verification_key(fingerprint),
+            )
             return
         self.redis.eval(
             """
-            redis.call('DEL', KEYS[1], KEYS[3])
+            redis.call('DEL', KEYS[1], KEYS[3], KEYS[4])
             if redis.call('GET', KEYS[2]) == ARGV[1] then
                 redis.call('DEL', KEYS[2])
             end
             return 1
             """,
-            3, self.session_key(fingerprint),
+            4, self.session_key(fingerprint),
             self.player_key(player_id), self.proof_key(fingerprint),
-            fingerprint,
+            self.verification_key(fingerprint), fingerprint,
         )
 
 
