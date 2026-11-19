@@ -16,6 +16,10 @@ from redis import Redis
 from .domain import INACTIVITY_SECONDS, is_session_expired, validate_coordinate
 
 
+class SessionExpired(RuntimeError):
+    pass
+
+
 class Sessions:
     """Bearer token never appears in the database or in Redis in plaintext."""
 
@@ -92,14 +96,26 @@ class Sessions:
         return data
 
     def claim_photo(self, token: str, photo_bytes: bytes) -> tuple[bool, str]:
-        """Only a session-scoped image fingerprint; no image bytes retained."""
+        """Atomic replay claim. The fingerprint cannot outlive its SESSION."""
         fingerprint = self.digest(token)
         photo_hash = hashlib.sha256(photo_bytes).hexdigest()
-        key = self.proof_key(fingerprint)
-        with self.redis.pipeline(transaction=True) as p:
-            p.sadd(key, photo_hash)
-            p.expire(key, INACTIVITY_SECONDS)
-            added, _ = p.execute()
+        # Synchronize expiry with the remaining session TTL, not a new
+        # 180-second TTL starting when the player takes a photograph.
+        added = self.redis.eval(
+            """
+            local ttl = redis.call('PTTL', KEYS[1])
+            if ttl <= 0 then return -1 end
+            local created = redis.call('SADD', KEYS[2], ARGV[1])
+            redis.call('PEXPIRE', KEYS[2], ttl)
+            return created
+            """,
+            2,
+            self.session_key(fingerprint),
+            self.proof_key(fingerprint),
+            photo_hash,
+        )
+        if added == -1:
+            raise SessionExpired("Session ended before photo claim")
         return bool(added), photo_hash
 
     def forget_photo(self, token: str, photo_hash: str) -> None:

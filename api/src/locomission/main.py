@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .domain import challenge_day, mission_is_reachable, utc_now, validate_coordinate
-from .infra import GameStore, Sessions
+from .infra import GameStore, SessionExpired, Sessions
 from .vision import InvalidPhoto, VisionUnavailable, grade_photo, normalize_photo
 
 bearer = HTTPBearer(auto_error=False)
@@ -232,7 +232,10 @@ def submit_proof(
         photo.file.close()
         del source
 
-    first_use, photo_hash = app.state.sessions.claim_photo(token, cleaned)
+    try:
+        first_use, photo_hash = app.state.sessions.claim_photo(token, cleaned)
+    except SessionExpired:
+        raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
     if not first_use:
         raise HTTPException(status_code=409, detail="התמונה כבר נשלחה ב-SESSION הזה")
 

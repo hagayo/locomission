@@ -148,6 +148,12 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert success.json()["awarded"] is True
         assert success.json()["points"] == 7
 
+        # Replay fingerprints never outlive their parent session key.
+        fingerprint = app.state.sessions.digest(token)
+        parent_ttl = app.state.cache.pttl(app.state.sessions.session_key(fingerprint))
+        proof_ttl = app.state.cache.pttl(app.state.sessions.proof_key(fingerprint))
+        assert 0 < proof_ttl <= parent_ttl
+
         duplicate = submit(group_only)
         assert duplicate.status_code == 200, duplicate.text
         assert duplicate.json()["points"] == 0
@@ -161,6 +167,7 @@ def test_full_solo_and_group_flow(monkeypatch):
             ).fetchone()[0] == 1
 
         assert client.delete("/api/sessions/current", headers=header).json()["ended"]
+        assert app.state.cache.exists(app.state.sessions.proof_key(fingerprint)) == 0
         assert client.get("/api/me", headers=header).status_code == 401
         with psycopg.connect(database_url) as conn:
             assert conn.execute(

@@ -47,3 +47,19 @@ and its mission list is available at `GET /api/groups/{id}/missions`
 after joining. A verified photo can complete an active group goal even when
 that mission is not one of the player's personal daily three. Shared group
 progress is recorded only once per challenge/mission.
+
+
+## Mobile-first interactive preview (local development only)
+
+With `LOCOMISSION_DEV_MODE=true`, visit `http://localhost:8000/prototype/`
+from a mobile browser. It uses the same API and offers the real gameplay
+navigation: map -> curated story -> camera/photo -> verification result, plus
+voluntary group joining. It requests location **only while the page is visible**
+and stops its location watcher when backgrounded. It is a **prototype**, not
+a committed PWA or native Android client.
+
+The development preview loads map tiles and Leaflet from external providers.
+Choose a mapping provider, review its terms and privacy disclosures, and
+configure secure HTTPS before any real-world release. Geolocation on another
+device normally requires HTTPS (localhost is treated as a secure context).
+No fake curated historical missions are inserted for the preview.

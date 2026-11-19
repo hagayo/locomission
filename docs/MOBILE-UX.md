@@ -13,3 +13,12 @@ The Android native versus Web/PWA decision is pending. These design rules apply 
 - The device explicitly requests foreground-only location permission and does not collect background movement.
 - Home, lobby, payments (when added) and privacy views should repeat consistent, accurate privacy/permission language without duplicating it unnecessarily on every screen.
 - Support a clear offline/no-permission state without imitating success or collecting location in the background.
+
+
+## Implemented preview
+
+A development-only interactive map-to-photo flow is at `/prototype/`.
+It intentionally shares the API but does **not** determine the release
+client technology. It has only one primary action at each point. Backgrounded
+pages stop GPS watching; the server still ends sessions after 180 seconds
+without location reports.
