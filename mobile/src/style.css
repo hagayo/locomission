@@ -15,3 +15,9 @@ h1{font-size:21px;line-height:1.35;margin:0 0 12px;font-weight:800}h2{font-size:
 .error{font-size:13px;color:#a33325;line-height:1.5;padding-top:6px}#footer{color:#6b7b79;text-align:center;font-size:11px;padding-top:10px}#footer a{color:inherit;text-decoration:underline}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
 @media(min-width:720px){.sheet{left:auto;width:min(470px,100%);border-radius:24px 0 0 0;max-height:78dvh}.bar{padding:20px 22px 0}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+.avatar-options{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 9px}
+.avatar-choice{width:43px;height:43px;flex:0 0 43px;border:1px solid #d8e3de;
+border-radius:50%;background:white;font-size:23px;cursor:pointer}
+.avatar-choice[aria-pressed="true"]{border:2px solid var(--deep);background:#e6f0eb}
+.achievement-entry{padding:6px 0;font-size:14px;color:var(--deep)}

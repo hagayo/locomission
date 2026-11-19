@@ -56,6 +56,7 @@
       <h1 id="group-title"></h1>
       <p id="group-description"></p>
       <p class="helper" id="group-progress"></p>
+      <p class="helper" id="group-presence" hidden></p>
       <div id="group-list"></div>
       <button type="button" id="group-join" class="primary">הצטרף לאתגר</button>
     </section>
@@ -72,7 +73,13 @@
         <input id="display-name" maxlength="80" minlength="1" required>
         <button type="submit" class="secondary">שמור שם</button>
       </form>
+      <div class="avatar-options" id="avatar-options" role="group" aria-label="בחירת אווטאר"></div>
       <div class="stats" id="profile-stats"></div>
+      <h2>הישגים</h2>
+      <div id="achievement-list"></div>
+      <h2>משימות שהשלמת</h2>
+      <div id="history-list"></div>
+      <button type="button" class="secondary wide" id="history-more" hidden>הצג עוד</button>
       <button type="button" id="leave" class="secondary wide">סיים משחק ושיתוף מיקום</button>
       <button type="button" id="sign-out" class="secondary wide">התנתק מהחשבון</button>
     </section>
