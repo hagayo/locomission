@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#12343a">
+  <meta name="description" content="LocoMission - העולם הוא המשימה שלך! עובדות היסטוריות ואתגרי צילום בסביבה שלך.">
+  <title>LocoMission - העולם הוא המשימה שלך!</title>
+</head>
+<body>
+  <div id="map" role="application" aria-label="מפת משחק LocoMission"></div>
+  <header class="bar">
+    <div class="brand" dir="ltr">Loco<span>Mission</span></div>
+    <div class="actions" id="actions" hidden>
+      <button type="button" id="rank-button" class="score" title="לוח מובילים" aria-label="לוח מובילים"><span id="points">0</span> ★</button>
+      <button type="button" id="profile-button" class="circle" aria-label="פרופיל שחקן">◯</button>
+    </div>
+  </header>
+  <main class="sheet" aria-live="polite">
+    <section id="setup">
+      <h1>העולם הוא המשימה שלך!</h1>
+      <p>סיפור מפתיע מחכה לך ממש מעבר לפינה.</p>
+      <p id="setup-note" class="helper">מתחברים למשחק עם חשבון Clerk.</p>
+      <div id="sign-in"></div>
+    </section>
+    <section id="welcome" hidden>
+      <h1>העולם הוא המשימה שלך!</h1>
+      <p>גלה עובדה היסטורית. צא למשימה. חזור עם תמונה.</p>
+      <label class="adult"><input id="adult" type="checkbox"> אני מאשר/ת שגילי 18 ומעלה</label>
+      <button type="button" class="primary" id="start">התחל משחק</button>
+      <p class="helper">המיקום משותף רק כשהמשחק פעיל בחזית. אימות תמונות באמצעות OpenAI GPT-4o mini.</p>
+    </section>
+    <section id="browse" hidden>
+      <nav class="tabs" aria-label="תוכן המשחק">
+        <button type="button" class="selected" id="tab-missions">משימות</button>
+        <button type="button" id="tab-groups">קבוצות</button>
+        <button type="button" id="tab-leaders">מובילים</button>
+      </nav>
+      <h1 id="browse-title" class="sr">משימות</h1>
+      <div id="browse-items"></div>
+    </section>
+    <section id="story" hidden>
+      <button type="button" id="story-back" class="back">חזרה למפה</button>
+      <h1 id="story-title"></h1>
+      <p class="story" id="story-fact"></p>
+      <a id="story-source" class="source" target="_blank" rel="noopener noreferrer"></a>
+      <div class="task">
+        <h2>המשימה</h2>
+        <p id="story-instructions"></p>
+        <ul id="story-criteria"></ul>
+      </div>
+      <button type="button" id="mission-action" class="primary">התחל משימה</button>
+    </section>
+    <section id="group" hidden>
+      <button type="button" id="group-back" class="back">חזרה למפה</button>
+      <h1 id="group-title"></h1>
+      <p id="group-description"></p>
+      <p class="helper" id="group-progress"></p>
+      <div id="group-list"></div>
+      <button type="button" id="group-join" class="primary">הצטרף לאתגר</button>
+    </section>
+    <section id="result" hidden>
+      <h1 id="result-title"></h1>
+      <p id="result-description"></p>
+      <button type="button" class="primary" id="result-next">חזרה למפה</button>
+    </section>
+    <section id="profile" hidden>
+      <button type="button" id="profile-back" class="back">חזרה למפה</button>
+      <h1>הפרופיל שלי</h1>
+      <form id="profile-form" autocomplete="off">
+        <label for="display-name">שם להצגה</label>
+        <input id="display-name" maxlength="80" minlength="1" required>
+        <button type="submit" class="secondary">שמור שם</button>
+      </form>
+      <div class="stats" id="profile-stats"></div>
+      <button type="button" id="leave" class="secondary wide">סיים משחק ושיתוף מיקום</button>
+      <button type="button" id="sign-out" class="secondary wide">התנתק מהחשבון</button>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <footer id="footer"><a href="/privacy.html">פרטיות</a><span> · </span><span>18+ בלבד</span></footer>
+  </main>
+  <input type="file" id="camera" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

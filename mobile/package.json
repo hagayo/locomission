@@ -1,0 +1,18 @@
+{
+  "name": "locomission-mobile-preview",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@clerk/clerk-js": "^6.0.0",
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  }
+}
