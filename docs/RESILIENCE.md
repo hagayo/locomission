@@ -107,3 +107,17 @@ size, host sizing and concurrent player distribution; measure at least
 error rate, p95 latency, throughput and database/Redis utilization.
 
 No deployment, live Clerk sign-in, billing, or live OpenAI run occurs in CI.
+
+## Stage 3 - global abuse and model budget controls
+
+All authenticated gameplay operations now consume a shared Redis budget keyed by a SHA-256 digest of the internal player ID, not a session token. Opening a SESSION has its own limit keyed by Clerk subject (or the single local development ID) so re-login cannot reset it. The quotas survive session replacement and expire automatically. No GPS, image data, proof fingerprints or bearer tokens appear in these keys.
+
+Provisional pilot defaults (override with environment variables): 360 gameplay API requests per player per 60-second window; 30 SESSION creations per player per 3600-second window; 20 OpenAI model attempts per player per 86400-second window; 250 model attempts per application per 86400-second window. These are *rolling anchored windows*, not calendar-day resets or contractual entitlements. Rejected limits return HTTP 429 and Retry-After.
+
+Model budget is spent directly before the external call, after proof validation and before any chargeable request. Transient model or network failure still consumes a slot because an external provider might have billed it. Replaying a known recorded result or recovering a committed completion is handled before this budget and does not charge a new slot.
+
+Local process semaphore still caps concurrent model calls. The Redis counters are distributed across API instances/workers, unlike the semaphore. Redis connection failure fails closed and returns 503; it never silently permits an unlimited API spend.
+
+These counters are *short-lived abuse-control metadata* and can survive logout; unlike gameplay SESSION data they cannot be cleared on every logout without making the limits trivial to bypass. They require explicit privacy review and a deletion-policy decision before real-user deployment. They are not proof that the physical-erasure SLA X is satisfied.
+
+Not a monetary ceiling: API token charges depend on image size and model pricing. Operational billing alerts and provider-side limits must still be configured.

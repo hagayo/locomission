@@ -137,3 +137,9 @@ API: `PATCH /api/me/avatar` (whitelisted ID), `GET /api/me/history?limit=10` (op
 Persistent avatar selection uses `players.settings`. Achievements are derived from successful completion counters and voluntary group participation; active counts use Redis SESSIONs but durable group progress is never deleted on logout. The group-member scan is capped at 200 with a truncation flag.
 
 Automated tests verify identity isolation, profile persistence across sessions, pagination, and the disappearance of disconnected group members.
+
+## Stage 3 - shared safeguards and browser tests
+
+Global Redis quotas for per-player gameplay requests, SESSION creation and per-player/global OpenAI attempts have configurable, provisional pilot limits in `render.yaml`. Known results are checked before another paid verification attempt. Counters outlive individual game sessions for anti-abuse protection and expire by TTL. See `docs/RESILIENCE.md` for exact defaults and privacy constraints.
+
+The Vite app's Clerk-authenticated HTTP client lives in `mobile/src/apiClient.js`; Node tests cover error status, binary uploads, session headers and refresh. Playwright Chromium tests run realistic browser interactions for GPS permission, mission discovery, simulated camera uploads and interrupted-response recovery. Clerk, OpenAI and the backend are mocked in these browser tests; the actual API is covered separately by PostgreSQL/Redis integration tests. A live-provider device smoke test remains a release gate.

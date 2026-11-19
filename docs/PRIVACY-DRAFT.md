@@ -28,3 +28,9 @@ completion records remain durable in PostgreSQL.
 If a server worker crashes before it records a rejected verdict, a subsequent
 retry may need a new model call. This is not a promise of exactly-once
 OpenAI billing. The deletion SLA X remains undecided.
+
+## Anti-abuse counters (Stage 3)
+
+Redis holds separate short-lived hashed player/Clerk-subject rate-limit keys and counters for gameplay requests, SESSION creations and chargeable photo-verification attempts. They contain no raw account ID, photo bytes, coordinates, EXIF or token. Limits and TTLs are configurable; initial pilot defaults are specified in `docs/RESILIENCE.md`.
+
+Unlike gameplay session presence and proof data, these counters deliberately remain across logout/SESSION replacement until expiry. Otherwise any user could evade model-cost controls by reconnecting. This is a separate temporary security-data category requiring explicit pre-launch privacy review and a product retention policy. The physical-deletion deadline X remains undecided.

@@ -291,8 +291,21 @@ def test_full_solo_and_group_flow(monkeypatch):
 
         monkeypatch.setattr("locomission.main.grade_photo", upstream_down)
         retried_id = uuid4()
-        transient = submit(group_only, retried_id)
-        assert transient.status_code == 503
+        # Per-player/global limits count model attempts even if the
+        # upstream call failed, because it might still be billable.
+        from dataclasses import replace
+        original_limits = app.state.limits
+        app.state.limits = replace(
+            original_limits, proofs_per_day=1,
+        )
+        try:
+            transient = submit(group_only, retried_id)
+            assert transient.status_code == 503
+            denied = submit(group_only, retried_id)
+            assert denied.status_code == 429
+            assert int(denied.headers["Retry-After"]) > 0
+        finally:
+            app.state.limits = original_limits
         pending_status = client.get(
             "/api/missions/" + str(group_only) +
             "/proof-requests/" + str(retried_id),
