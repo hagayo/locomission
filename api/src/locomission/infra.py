@@ -361,6 +361,43 @@ class Sessions:
         )
         return saved == 1
 
+    def nearby_group_members(self, player_ids: list[str],
+                             location: dict[str, float]) -> int:
+        """Count live group peers near the viewer; never reveal IDs or GPS."""
+        if not player_ids:
+            return 0
+        # Bounded by GameStore.active_group_member_ids; no Redis SCAN.
+        keys = [self.player_key(player_id) for player_id in player_ids]
+        owners = self.redis.mget(keys)
+        session_keys = [
+            self.session_key(digest) for digest in owners if digest
+        ]
+        snapshots = self.redis.mget(session_keys) if session_keys else []
+        count = 0
+        now = time.time()
+        idx = 0
+        for player_id, owner in zip(player_ids, owners):
+            if not owner:
+                continue
+            raw = snapshots[idx]
+            idx += 1
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+                spot = data.get("location")
+                if (data["player_id"] != player_id
+                        or is_session_expired(data["last_report"], now)
+                        or not spot):
+                    continue
+                if distance_m(
+                    location["lat"], location["lon"], spot["lat"], spot["lon"]
+                ) <= self.PRESENCE_RADIUS_M:
+                    count += 1
+            except (ValueError, TypeError, KeyError):
+                continue
+        return count
+
     def active_presence(self, viewer_token: str,
                         location: dict[str, float], limit: int = 500) -> dict:
         """Nearby anonymous ~100m cells, without a global session scan.
@@ -541,11 +578,84 @@ class GameStore:
             )
         return self.profile(player_id)
 
+    def set_avatar(self, player_id: str, avatar_id: str) -> dict[str, Any]:
+        """Whitelisted preset, stored as a tiny JSON setting, no image upload."""
+        from .progression import AVATAR_IDS
+
+        if avatar_id not in AVATAR_IDS:
+            raise ValueError("Unknown avatar ID")
+        with self.pool.connection() as conn:
+            conn.execute(
+                "UPDATE players SET settings=jsonb_set(settings,'{avatar}',"
+                "to_jsonb(%s::text),true) WHERE id=%s",
+                (avatar_id, UUID(player_id)),
+            )
+        return self.profile(player_id)
+
+    def completed_history(self, player_id: str, limit: int = 10,
+                          before: UUID | None = None) -> dict[str, Any]:
+        """Keyset pagination scoped to authenticated player; no GPS or proofs."""
+        player = UUID(player_id)
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id::text AS id, c.completed_at, c.challenge_day,"
+                " c.points_awarded, m.id::text AS mission_id, m.title_he"
+                " FROM completions c JOIN missions m ON m.id=c.mission_id"
+                " WHERE c.player_id=%s"
+                " AND (%s::uuid IS NULL OR (c.completed_at,c.id) < ("
+                " SELECT earlier.completed_at,earlier.id FROM completions earlier"
+                " WHERE earlier.id=%s AND earlier.player_id=%s))"
+                " ORDER BY c.completed_at DESC,c.id DESC LIMIT %s",
+                (player, before, before, player, limit + 1),
+            ).fetchall()
+        items = rows[:limit]
+        return {
+            "items": items,
+            "next_before": items[-1]["id"] if len(rows) > limit else None,
+        }
+
+    def group_join_count(self, player_id: str) -> int:
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "SELECT count(*) AS total FROM group_members WHERE player_id=%s",
+                (UUID(player_id),),
+            ).fetchone()["total"]
+
+    def active_group_member_ids(self, group_id: UUID, viewer_id: str,
+                                limit: int = 200) -> list[str] | None:
+        """Only a group member may request an anonymous nearby count.
+
+        Return at most limit+1 IDs privately to API code; never expose them.
+        """
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT mb.player_id::text AS player_id FROM group_members mb"
+                " JOIN group_challenges g ON g.id=mb.challenge_id"
+                " WHERE mb.challenge_id=%s AND mb.player_id<>%s"
+                " AND g.status='published'"
+                " AND now() BETWEEN g.opens_at AND g.closes_at"
+                " AND EXISTS (SELECT 1 FROM group_members own"
+                " WHERE own.challenge_id=mb.challenge_id AND own.player_id=%s)"
+                " ORDER BY mb.joined_at,mb.player_id LIMIT %s",
+                (group_id, UUID(viewer_id), UUID(viewer_id), limit + 1),
+            ).fetchall()
+            # An empty group could mean the viewer isn't a member.
+            allowed = conn.execute(
+                "SELECT 1 FROM group_members own"
+                " JOIN group_challenges g ON g.id=own.challenge_id"
+                " WHERE own.challenge_id=%s AND own.player_id=%s"
+                " AND g.status='published'"
+                " AND now() BETWEEN g.opens_at AND g.closes_at",
+                (group_id, UUID(viewer_id)),
+            ).fetchone()
+            return [r["player_id"] for r in rows] if allowed else None
+
     def leaderboard(self, limit: int = 50) -> list[dict[str, Any]]:
         with self.pool.connection() as conn:
             return conn.execute(
                 "SELECT display_name,total_points,missions_started,"
-                "completed_missions FROM players "
+                "completed_missions,"
+                "COALESCE(settings->>'avatar','explorer') AS avatar_id FROM players "
                 "WHERE adult_confirmed_at IS NOT NULL OR clerk_user_id IS NULL "
                 "ORDER BY total_points DESC,completed_missions DESC,id LIMIT %s",
                 (limit,),
@@ -580,7 +690,8 @@ class GameStore:
         with self.pool.connection() as conn:
             return conn.execute(
                 "SELECT id::text AS id, display_name,total_points,completed_missions, "
-                "missions_started,credits_balance,plan_code,avatar_url,settings "
+                "missions_started,credits_balance,plan_code,avatar_url,settings, "
+                "COALESCE(settings->>'avatar','explorer') AS avatar_id "
                 "FROM players WHERE id=%s",
                 (UUID(player_id),),
             ).fetchone()

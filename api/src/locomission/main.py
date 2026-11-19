@@ -103,6 +103,11 @@ class ProfileChange(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
 
 
+class AvatarChange(BaseModel):
+    avatar_id: str
+
+
+
 class LocationReport(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
@@ -238,6 +243,36 @@ def edit_profile(change: ProfileChange, auth: tuple[str, dict] = Depends(identit
     return app.state.game.set_player_name(auth[1]["player_id"], name)
 
 
+@app.patch("/api/me/avatar")
+def change_avatar(change: AvatarChange, auth: tuple[str, dict] = Depends(identity)):
+    from .progression import AVATAR_IDS
+
+    if change.avatar_id not in AVATAR_IDS:
+        raise HTTPException(status_code=422, detail="אווטאר לא מוכר")
+    return app.state.game.set_avatar(auth[1]["player_id"], change.avatar_id)
+
+
+@app.get("/api/me/history")
+def mission_history(
+    limit: int = 10, before: UUID | None = None,
+    auth: tuple[str, dict] = Depends(identity),
+):
+    if not 1 <= limit <= 20:
+        raise HTTPException(status_code=422, detail="מגבלת היסטוריה אינה תקינה")
+    return app.state.game.completed_history(auth[1]["player_id"], limit, before)
+
+
+@app.get("/api/me/achievements")
+def my_achievements(auth: tuple[str, dict] = Depends(identity)):
+    from .progression import achievements
+
+    player_id = auth[1]["player_id"]
+    profile = app.state.game.profile(player_id)
+    return {"achievements": achievements(
+        profile, app.state.game.group_join_count(player_id),
+    )}
+
+
 @app.get("/api/me")
 def my_profile(auth: tuple[str, dict] = Depends(identity)):
     _, session = auth
@@ -304,6 +339,24 @@ def group_missions(group_id: UUID, auth: tuple[str, dict] = Depends(identity)):
         )
     }
 
+
+
+@app.get("/api/groups/{group_id}/presence")
+def group_presence(group_id: UUID, auth: tuple[str, dict] = Depends(identity)):
+    _, session = auth
+    location = require_location(session)
+    members = app.state.game.active_group_member_ids(
+        group_id, session["player_id"],
+    )
+    if members is None:
+        raise HTTPException(status_code=403, detail="יש להצטרף לאתגר")
+    limited = members[:200]
+    return {
+        "active_nearby": app.state.sessions.nearby_group_members(
+            limited, location,
+        ),
+        "truncated": len(members) > len(limited),
+    }
 
 
 @app.post("/api/groups/{group_id}/join")
