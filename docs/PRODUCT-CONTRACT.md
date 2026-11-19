@@ -53,3 +53,15 @@ Do not award points on OpenAI timeout, model failure, invalid JSON, unapproved m
 - Privacy/legal review, minors/consent decisions, third-party processing, deletion requests.
 - Premium purchases: no real charging or claimed entitlements before payment design.
 - Android native versus web/PWA still open. This backend does not settle it.
+
+
+### Movement plausibility in the first API slice
+
+Server-side checks also flag implausibly fast jumps between the most recent
+two foreground reports (a 100 m/s baseline with 100 m and GPS-accuracy slack).
+This is a lightweight anti-teleport heuristic, not proof of authentic GPS.
+It does not block a modified device that forges a gradual route. Thresholds
+need field testing to avoid false positives before production use.
+
+Daily discovery excludes missions the player has already completed on earlier
+days; if too few curated local missions are left, fewer than three are shown.

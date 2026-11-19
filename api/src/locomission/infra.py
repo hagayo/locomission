@@ -13,10 +13,14 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from redis import Redis
 
-from .domain import INACTIVITY_SECONDS, is_session_expired, validate_coordinate
+from .domain import INACTIVITY_SECONDS, is_session_expired, plausible_movement, validate_coordinate
 
 
 class SessionExpired(RuntimeError):
+    pass
+
+
+class SuspiciousLocation(ValueError):
     pass
 
 
@@ -82,10 +86,14 @@ class Sessions:
         data = self.read(token)
         if data is None:
             return None
-        data["last_report"] = time.time()
-        data["location"] = {
-            "lat": lat, "lon": lon, "accuracy_m": accuracy_m
-        }
+        instant = time.time()
+        new_location = {"lat": lat, "lon": lon, "accuracy_m": accuracy_m}
+        if not plausible_movement(
+            data["location"], new_location, instant - data["last_report"]
+        ):
+            raise SuspiciousLocation("Implausible location jump")
+        data["last_report"] = instant
+        data["location"] = new_location
         fingerprint = self.digest(token)
         with self.redis.pipeline(transaction=True) as p:
             p.set(self.session_key(fingerprint), json.dumps(data),
@@ -200,12 +208,14 @@ class GameStore:
                         "AND ST_DWithin(m.location, "
                         "ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,m.radius_m) "
                         "AND %s <= m.radius_m "
+                        "AND NOT EXISTS (SELECT 1 FROM completions c "
+                        "WHERE c.player_id=%s AND c.mission_id=m.id) "
                         "ORDER BY md5(m.id::text || %s || %s) LIMIT 3",
                         (
                             location["lon"], location["lat"],
                             location["lon"], location["lat"],
-                            location["accuracy_m"], player_id,
-                            day.isoformat(),
+                            location["accuracy_m"], player,
+                            player_id, day.isoformat(),
                         ),
                     ).fetchall()
                     for slot, row in enumerate(candidates, start=1):

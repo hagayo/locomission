@@ -37,3 +37,15 @@ def test_geofence_is_conservative():
 def test_uuid_is_canonical():
     assert require_uuid("B9B7661E-ABF2-40DD-8EE7-81C3A438D7C5") == \
            "b9b7661e-abf2-40dd-8ee7-81c3a438d7c5"
+
+
+def test_movement_rejects_implausible_teleport():
+    from locomission.domain import distance_m, plausible_movement
+
+    before = {"lat": 32.0853, "lon": 34.7818, "accuracy_m": 10}
+    same = {"lat": 32.0854, "lon": 34.7819, "accuracy_m": 10}
+    far = {"lat": 33.0, "lon": 34.7818, "accuracy_m": 10}
+    assert 0 < distance_m(32.0853, 34.7818, 32.0854, 34.7819) < 20
+    assert plausible_movement(before, same, 1)
+    assert not plausible_movement(before, far, 1)
+    assert plausible_movement(None, far, 1)

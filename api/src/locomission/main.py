@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .domain import challenge_day, mission_is_reachable, utc_now, validate_coordinate
-from .infra import GameStore, SessionExpired, Sessions
+from .infra import GameStore, SessionExpired, Sessions, SuspiciousLocation
 from .vision import InvalidPhoto, VisionUnavailable, grade_photo, normalize_photo
 
 bearer = HTTPBearer(auto_error=False)
@@ -146,9 +146,14 @@ def report_location(
     except ValueError:
         raise HTTPException(status_code=400, detail="נתוני מיקום לא תקינים")
     token, _ = auth
-    updated = app.state.sessions.report(
-        token, report.lat, report.lon, report.accuracy_m,
-    )
+    try:
+        updated = app.state.sessions.report(
+            token, report.lat, report.lon, report.accuracy_m,
+        )
+    except SuspiciousLocation:
+        raise HTTPException(
+            status_code=403, detail="זוהתה קפיצת מיקום שאינה סבירה"
+        )
     if updated is None:
         raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
     # Never include player coordinates in the response.
