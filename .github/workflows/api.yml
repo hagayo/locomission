@@ -97,5 +97,9 @@ jobs:
         run: npm test
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
-      - name: Build mobile preview without secrets
-        run: npm run build
+      - name: Build GitHub Pages site layout without credentials
+        run: |
+          VITE_BASE_PATH=/locomission/ npm run build
+          grep -q '/locomission/assets/' dist/index.html
+          grep -q 'href="./privacy.html"' dist/index.html
+          test -f dist/privacy.html

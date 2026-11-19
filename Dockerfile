@@ -16,5 +16,5 @@ COPY db/ /app/db/
 # Numeric unprivileged user; image never contains .env files or API keys.
 USER 10001:10001
 EXPOSE 8080
-# One worker per instance; Cloud Run manages horizontal scaling.
+# One worker per instance keeps memory and model concurrency bounded on Render.
 CMD ["sh", "-c", "exec uvicorn locomission.main:app --host 0.0.0.0 --port \"$PORT\" --workers 1 --no-access-log"]
