@@ -63,5 +63,7 @@ jobs:
         run: node --check src/main.js
       - name: Install frontend dependencies
         run: npm install --no-audit --no-fund
+      - name: Emit temporary lockfile snapshot
+        run: python3 -c "import pathlib,json; p=pathlib.Path('package-lock.json'); print('LMLOCK_BEGIN'); [print('LMLOCK:'+json.dumps(s)) for s in p.read_text().splitlines(keepends=True)]; print('LMLOCK_END')"
       - name: Build mobile preview without secrets
         run: npm run build
