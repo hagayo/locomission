@@ -390,14 +390,20 @@ def test_full_solo_and_group_flow(monkeypatch):
     from datetime import datetime, timezone
     from locomission.domain import challenge_day
     today = challenge_day(datetime.now(timezone.utc))
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        awards = list(executor.map(
-            lambda i: app.state.game.award(
-                os.environ["LOCOMISSION_DEV_PLAYER_ID"],
-                second_solo, today, uuid4(),
-            ),
-            range(36),
-        ))
+    # Independent store keeps its PostgreSQL pool alive outside TestClient.
+    from locomission.infra import GameStore
+    scoring_store = GameStore(database_url)
+    try:
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            awards = list(executor.map(
+                lambda i: scoring_store.award(
+                    os.environ["LOCOMISSION_DEV_PLAYER_ID"],
+                    second_solo, today, uuid4(),
+                ),
+                range(36),
+            ))
+    finally:
+        scoring_store.close()
     assert sum(row["points"] for row in awards) == 7
     assert sum(row["awarded"] for row in awards) == 1
     with psycopg.connect(database_url) as db:

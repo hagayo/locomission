@@ -60,7 +60,9 @@ jobs:
         with:
           node-version: "22"
       - name: JavaScript syntax
-        run: node --check src/main.js
+        run: node --check src/main.js && node --check src/proofRecovery.js
+      - name: Frontend recovery tests
+        run: npm test
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
       - name: Build mobile preview without secrets
