@@ -10,3 +10,7 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+
+# Browser test artifacts
+mobile/test-results/
+mobile/playwright-report/
