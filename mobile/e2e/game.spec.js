@@ -149,6 +149,7 @@ test("interrupted photo response: check status, retry same UUID, no double credi
   await openGame(page);
   await page.locator("#browse-items button").first().click();
   await page.locator("#mission-action").click();
+  await expect(page.locator("#mission-action")).toHaveText("צלם הוכחה");
   await page.locator("#camera").setInputFiles({
     name: "proof.png", mimeType: "image/png",
     buffer: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0])

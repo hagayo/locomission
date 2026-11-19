@@ -95,10 +95,6 @@ jobs:
         run: node --check src/main.js && node --check src/proofRecovery.js
       - name: Frontend recovery tests
         run: npm test
-      - name: Temporary deterministic browser-test lock generation
-        run: |
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          python3 -c "import pathlib,json; [print('LMLOCK:'+json.dumps(line)) for line in pathlib.Path('package-lock.json').read_text().splitlines(keepends=True)]"
       - name: Install frontend dependencies
         run: npm ci --no-audit --no-fund
       - name: Install Playwright Chromium
