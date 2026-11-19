@@ -78,3 +78,12 @@ session replacement removes indexed membership. Expired keys become invisible
 immediately on session expiry; GEO bucket TTL provides eventual index cleanup,
 not a defined physical deletion SLA X. Redis GEO cannot represent polar caps;
 valid gameplay GPS there does not create map presence markers.
+
+## MVP stage 2 - group activity, history, achievements and avatars
+
+- Joined players see only the number of other group participants with an active foreground SESSION within 1 km of the viewer. No names, IDs or exact coordinates are returned.
+- The presence endpoint requires membership in the currently open group, checks at most 200 other members and flags a truncated scan. Group membership and mission results remain in PostgreSQL on session end.
+- The private history endpoint retrieves successful completions for the signed-in player only, with keyset pagination (at most 20 results per page); it excludes proof images, locations and request IDs.
+- Achievements (1, 5, 20 completed missions and first group participation) are derived from permanent counters and memberships, without a separate mutable achievements ledger.
+- Five whitelisted preset avatars are stored in the durable player settings JSON. No avatar photos, URLs or third-party media storage are used.
+- The existing profile and group screens are reused. There is no additional navigation layer.

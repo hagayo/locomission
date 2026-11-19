@@ -127,3 +127,13 @@ one paid Render web service and external PostgreSQL/PostGIS + Redis URLs.
 Publishing is **manual**, and credentials must be configured outside Git.
 
 See [deployment setup](docs/DEPLOY-RENDER-PAGES.md).
+
+## Social MVP - phase 2
+
+The existing group screen shows an anonymous count of other active members within 1 km, never identities or exact GPS. The existing profile screen offers five preset avatar icons, a private paginated completion history and four achievement milestones. No new database migration or media service is required.
+
+API: `PATCH /api/me/avatar` (whitelisted ID), `GET /api/me/history?limit=10` (optional `before` completion UUID), `GET /api/me/achievements`, and `GET /api/groups/{group_id}/presence` (joined, active groups only).
+
+Persistent avatar selection uses `players.settings`. Achievements are derived from successful completion counters and voluntary group participation; active counts use Redis SESSIONs but durable group progress is never deleted on logout. The group-member scan is capped at 200 with a truncation flag.
+
+Automated tests verify identity isolation, profile persistence across sessions, pagination, and the disappearance of disconnected group members.
