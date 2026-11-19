@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#123139">
+<title>LocoMission - העולם הוא המשימה שלך!</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{font:16px Arial,system-ui,sans-serif;color:#183239;--ink:#123139;--accent:#f2be54}
+*{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden}button{font:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:3px solid #218fbc;outline-offset:3px}
+[hidden]{display:none!important}
+#map{position:fixed;inset:0;background:#d9e9df}
+.leaflet-control-attribution{font-size:10px!important}
+.top{position:fixed;z-index:450;top:0;left:0;right:0;padding:calc(env(safe-area-inset-top) + 12px) 14px 0;display:flex;justify-content:space-between;gap:8px;pointer-events:none}
+.top>*{pointer-events:auto}
+.brand{direction:ltr;background:var(--ink);color:white;border-radius:30px;padding:11px 16px;font-size:18px;font-weight:800;box-shadow:0 3px 14px #0b30303b}
+.brand b{color:var(--accent)}
+.controls{display:flex;align-items:center;gap:6px}
+.score,.exit{border:0;background:white;border-radius:25px;padding:10px 13px;min-height:42px;box-shadow:0 3px 14px #0b30303b}
+.score{font-weight:700}.exit{font-size:17px}
+.sheet{position:fixed;z-index:450;bottom:0;right:0;left:0;background:#fffdf9;border-radius:22px 22px 0 0;max-height:75dvh;overflow-y:auto;overscroll-behavior:contain;padding:18px 18px calc(18px + env(safe-area-inset-bottom));box-shadow:0 -6px 30px #143a343a}
+.sheet>section{max-width:460px;margin-inline:auto}
+h1,h2{font-size:21px;line-height:1.4;margin:0 0 9px}p{line-height:1.65;margin:10px 0}small,.muted{color:#5b6e70;font-size:13px}
+.primary{display:block;width:100%;border:0;border-radius:13px;background:var(--ink);color:white;font-weight:750;font-size:16px;padding:14px 12px;margin-top:15px;min-height:50px}
+.primary:disabled{opacity:.65}.back{border:0;background:transparent;color:var(--ink);padding:7px 0 14px;font-weight:700}
+.tabs{display:flex;padding:3px;border-radius:12px;background:#eaf0ed;gap:3px;margin-bottom:12px}
+.tabs button{flex:1;border:0;padding:11px 6px;border-radius:10px;background:transparent;color:#5b6e70}
+.tabs button[aria-selected="true"]{background:white;color:var(--ink);font-weight:700;box-shadow:0 1px 5px #1231391e}
+.entry{background:none;border:0;border-bottom:1px solid #e5ebe8;width:100%;text-align:right;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:13px 2px;color:var(--ink)}
+.entry:last-child{border-bottom:0}.entry strong{display:block;font-size:15px}.entry span{display:block;color:#5b6e70;font-size:13px;margin-top:4px}
+.entry aside{font-size:13px;white-space:nowrap;color:#587078}
+.story{font-size:16px;line-height:1.75}.criteria{padding-inline-start:19px;line-height:1.65}
+.source{font-size:13px;color:#0d7283;word-break:break-word}
+.notice{margin-top:10px;font-size:13px;color:#5b6e70}
+.error{color:#9b3622;font-size:13px;line-height:1.5}
+#status{min-height:0}
+.pin{border:2px solid white;width:31px;height:31px;border-radius:50%;background:#123139;color:white;display:grid;place-items:center;font-weight:bold;box-shadow:0 3px 12px #12313980}
+.pin.group{background:#328061}
+@media(min-width:680px){.sheet{left:auto;width:min(460px,100%);border-radius:24px 0 0 0}.top{padding:20px 24px 0}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+</style>
+</head>
+<body>
+<div id="map" aria-label="מפת המשחק"></div>
+<header class="top">
+  <div class="brand">Loco<b>Mission</b></div>
+  <div class="controls" id="player-controls" hidden>
+    <div class="score" id="score">0 נקודות</div>
+    <button class="exit" id="exit" type="button" title="סיום המשחק" aria-label="סיום המשחק">×</button>
+  </div>
+</header>
+<main class="sheet" aria-live="polite">
+  <section id="intro">
+    <h1>העולם הוא המשימה שלך!</h1>
+    <p>גלה את הסיפור שמסתתר ברחוב וצא למשימת צילום קצרה.</p>
+    <p class="notice">מיקום רק בזמן משחק. תמונות נבדקות באמצעות OpenAI GPT-4o mini.</p>
+    <button id="start" class="primary" type="button">התחל לחקור</button>
+  </section>
+  <section id="browse" hidden>
+    <div class="tabs" role="tablist" aria-label="בחירת סוג אתגר">
+      <button id="missions-tab" role="tab" type="button" aria-selected="true">משימות</button>
+      <button id="groups-tab" role="tab" type="button" aria-selected="false">קבוצות</button>
+    </div>
+    <div id="items"></div>
+  </section>
+  <section id="mission-view" hidden>
+    <button class="back" type="button" id="back-mission">חזרה למפה</button>
+    <h2 id="mission-title"></h2>
+    <p class="story" id="mission-story"></p>
+    <a class="source" id="mission-source" target="_blank" rel="noopener noreferrer"></a>
+    <p id="mission-instructions"></p>
+    <ul class="criteria" id="mission-criteria"></ul>
+    <button id="capture" type="button" class="primary">צלם הוכחה</button>
+  </section>
+  <section id="group-view" hidden>
+    <button class="back" type="button" id="back-group">חזרה למפה</button>
+    <h2 id="group-title"></h2>
+    <p id="group-description"></p>
+    <p class="muted" id="group-progress"></p>
+    <div id="group-mission-list"></div>
+    <button id="join" class="primary" type="button">הצטרף לאתגר</button>
+  </section>
+  <section id="result-view" hidden>
+    <h2 id="result-title"></h2>
+    <p id="result-detail"></p>
+    <button id="result-action" class="primary" type="button">חזרה למפה</button>
+  </section>
+  <p id="status" role="status" class="error" hidden></p>
+</main>
+<input id="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+const byId = id => document.getElementById(id);
+const state = {token:null,ready:false,mode:"missions",missions:[],groups:[],mission:null,group:null,watch:null,timer:null,position:null,locating:false,markers:[]};
+const sections = ["intro","browse","mission-view","group-view","result-view"];
+const map = window.L ? L.map("map",{zoomControl:false}).setView([31.55,34.88],8) : null;
+if(map){L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap contributors",maxZoom:19}).addTo(map);}
+function status(text){byId("status").textContent=text||"";byId("status").hidden=!text;}
+function show(id){sections.forEach(section=>byId(section).hidden=section!==id);status("");}
+function node(tag,text,cls){const element=document.createElement(tag);if(text!==undefined)element.textContent=String(text);if(cls)element.className=cls;return element;}
+function entry(title,detail,end,handler){
+  const button=node("button",undefined,"entry");button.type="button";
+  const block=node("div");block.append(node("strong",title));if(detail)block.append(node("span",detail));
+  button.append(block,node("aside",end||""));button.addEventListener("click",handler);return button;
+}
+async function api(path,options={}){
+  const headers=Object.assign({},options.headers||{});
+  if(state.token)headers.Authorization="Bearer "+state.token;
+  const response=await fetch(path,Object.assign({},options,{headers,cache:"no-store"}));
+  let body={};try{body=await response.json();}catch{}
+  if(!response.ok){
+    if(response.status===401){reset();}
+    throw new Error(typeof body.detail==="string" ? body.detail : "הפעולה נכשלה");
+  }
+  return body;
+}
+function stopLocation(){
+  if(state.watch!==null && navigator.geolocation)navigator.geolocation.clearWatch(state.watch);
+  if(state.timer!==null)clearInterval(state.timer);
+  state.watch=null;state.timer=null;
+}
+function reset(){
+  stopLocation();state.token=null;state.ready=false;state.position=null;
+  state.missions=[];state.groups=[];state.markers.forEach(m=>m.remove());state.markers=[];
+  byId("player-controls").hidden=true;byId("start").disabled=false;show("intro");
+}
+function refreshPins(){
+  if(!map)return;
+  state.markers.forEach(m=>m.remove());state.markers=[];
+  const make=(location,label,isGroup,click)=>{
+    const icon=L.divIcon({className:"",html:'<div class="pin'+(isGroup?' group':'')+'">'+label+'</div>',iconSize:[31,31],iconAnchor:[15,15]});
+    const marker=L.marker([location.lat,location.lon],{icon}).addTo(map);marker.on("click",click);state.markers.push(marker);
+  };
+  if(state.mode==="missions")state.missions.forEach(m=>make(m,"•",false,()=>openMission(m)));
+  else state.groups.forEach(g=>make(g,"◎",true,()=>openGroup(g)));
+}
+function renderList(){
+  const isMission=state.mode==="missions";
+  byId("missions-tab").setAttribute("aria-selected",String(isMission));
+  byId("groups-tab").setAttribute("aria-selected",String(!isMission));
+  const items=byId("items");items.replaceChildren();
+  if(!state.ready){items.append(node("p","מחפש מיקום מדויק בקדמת האפליקציה...","muted"));return;}
+  const values=isMission?state.missions:state.groups;
+  if(!values.length){items.append(node("p",isMission?"עדיין אין משימות היסטוריות מאושרות בקרבתך.":"אין כרגע אתגרים קבוצתיים באזור.","muted"));return;}
+  values.forEach(value=>{
+    items.append(isMission
+      ?entry(value.title_he,value.completed?"הושלמה":"משימה היסטורית",value.points+" נקודות",()=>openMission(value))
+      :entry(value.title_he,value.completed+"/"+value.missions+" משימות",value.members+" משתתפים",()=>openGroup(value)));
+  });
+}
+async function refresh(){
+  if(!state.token||!state.ready)return;
+  const [missions,groups,profile]=await Promise.all([
+    api("/api/missions/today"),api("/api/groups/nearby"),api("/api/me")
+  ]);
+  state.missions=missions.missions;state.groups=groups.groups;
+  byId("score").textContent=profile.total_points+" נקודות";
+  byId("player-controls").hidden=false;renderList();refreshPins();
+}
+async function onPosition(pos){
+  if(document.hidden||!state.token||state.locating)return;
+  state.locating=true;
+  try{
+    const c=pos.coords;
+    await api("/api/location",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      lat:c.latitude,lon:c.longitude,accuracy_m:c.accuracy,foreground:true
+    })});
+    if(!state.token)return;
+    state.position={lat:c.latitude,lon:c.longitude};
+    if(map)map.setView([c.latitude,c.longitude],Math.max(map.getZoom(),15));
+    const first=!state.ready;state.ready=true;
+    if(first){show("browse");}
+    await refresh();
+  }catch(error){status(error.message);}finally{state.locating=false;}
+}
+function locationError(err){status(err.code===1?"נדרשת הרשאת מיקום בזמן שימוש כדי לשחק.":"לא ניתן לקבל מיקום מדויק כעת.");}
+function freshPosition(){if(!document.hidden&&state.token)navigator.geolocation.getCurrentPosition(onPosition,locationError,{enableHighAccuracy:true,maximumAge:0,timeout:15000});}
+function startLocation(){
+  if(!navigator.geolocation){status("המכשיר אינו תומך בשירותי מיקום.");return;}
+  stopLocation();
+  if(document.hidden)return;
+  state.watch=navigator.geolocation.watchPosition(onPosition,locationError,{enableHighAccuracy:true,maximumAge:0,timeout:15000});
+  state.timer=setInterval(freshPosition,45000);
+}
+byId("start").addEventListener("click",async()=>{
+  const button=byId("start");button.disabled=true;status("");
+  if(!map){status("המפה אינה זמינה. נדרש חיבור לאינטרנט.");button.disabled=false;return;}
+  try{
+    const session=await api("/api/sessions",{method:"POST"});
+    state.token=session.session_token;show("browse");renderList();startLocation();
+  }catch(error){button.disabled=false;status(error.message);}
+});
+byId("exit").addEventListener("click",async()=>{
+  try{await api("/api/sessions/current",{method:"DELETE"});}catch{}
+  reset();
+});
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){stopLocation();}
+  else if(state.token){startLocation();freshPosition();}
+});
+window.addEventListener("pagehide",stopLocation);
+byId("missions-tab").addEventListener("click",()=>{state.mode="missions";renderList();refreshPins();});
+byId("groups-tab").addEventListener("click",()=>{state.mode="groups";renderList();refreshPins();});
+function openMission(mission){
+  state.mission=mission;show("mission-view");
+  byId("mission-title").textContent=mission.title_he;
+  byId("mission-story").textContent=mission.historical_fact_he;
+  byId("mission-instructions").textContent=mission.instructions_he;
+  const source=byId("mission-source");source.textContent="מקור: "+mission.source_title;
+  try{const url=new URL(mission.source_url);source.href=["https:","http:"].includes(url.protocol)?url.href:"#";}catch{source.href="#";}
+  const criteria=byId("mission-criteria");criteria.replaceChildren();
+  mission.visual_criteria_he.forEach(v=>criteria.append(node("li",v)));
+  byId("capture").disabled=!!mission.completed;
+  byId("capture").textContent=mission.completed?"המשימה כבר הושלמה":"צלם הוכחה";
+}
+byId("back-mission").addEventListener("click",()=>{show("browse");renderList();});
+byId("capture").addEventListener("click",()=>byId("photo").click());
+byId("photo").addEventListener("change",async(event)=>{
+  const file=event.target.files[0];event.target.value="";
+  if(!file||!state.mission)return;
+  const button=byId("capture");button.disabled=true;button.textContent="בודק את התמונה...";
+  try{
+    const form=new FormData();form.append("request_id",crypto.randomUUID());form.append("photo",file,file.name);
+    const verdict=await api("/api/missions/"+state.mission.id+"/proof",{method:"POST",body:form});
+    byId("result-title").textContent=verdict.accepted?(verdict.awarded?"המשימה הושלמה!":"המשימה כבר הושלמה"):"נדרש ניסיון נוסף";
+    byId("result-detail").textContent=(verdict.points>0?"+"+verdict.points+" נקודות. ":"")+(verdict.reason_he||"");
+    byId("result-action").textContent=verdict.accepted?"חזרה למפה":"נסה לצלם שוב";
+    byId("result-action").onclick=verdict.accepted?async()=>{show("browse");await refresh();}:()=>openMission(state.mission);
+    show("result-view");
+  }catch(error){status(error.message);}
+  finally{button.disabled=false;button.textContent="צלם הוכחה";}
+});
+async function openGroup(group){
+  state.group=group;show("group-view");
+  byId("group-title").textContent=group.title_he;byId("group-description").textContent=group.description_he;
+  byId("group-progress").textContent=group.completed+" מתוך "+group.missions+" משימות קבוצתיות הושלמו";
+  byId("group-mission-list").replaceChildren();
+  byId("join").hidden=false;
+  try{
+    const result=await api("/api/groups/"+group.id+"/missions");
+    if(result.missions.length)showGroupGoals(result.missions);
+  }catch(error){status(error.message);}
+}
+function showGroupGoals(missions){
+  byId("join").hidden=true;
+  const list=byId("group-mission-list");list.replaceChildren();
+  missions.forEach(m=>list.append(entry(m.title_he,m.completed_by_group?"הקבוצה השלימה":"משימה משותפת",m.points+" נקודות",()=>openMission(m))));
+}
+byId("join").addEventListener("click",async()=>{
+  const group=state.group;
+  try{
+    await api("/api/groups/"+group.id+"/join",{method:"POST"});
+    const goals=await api("/api/groups/"+group.id+"/missions");
+    showGroupGoals(goals.missions);
+  }catch(error){status(error.message);}
+});
+byId("back-group").addEventListener("click",()=>{show("browse");renderList();});
+</script>
+</body>
+</html>

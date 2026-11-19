@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import UUID
 
 import redis
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .domain import challenge_day, mission_is_reachable, utc_now, validate_coordinate
@@ -41,6 +43,20 @@ app = FastAPI(
     description="The world is your mission. Development-only identity bootstrap.",
     lifespan=lifespan,
 )
+
+
+# Browser prototype only. This is NOT a decision to ship as a PWA.
+# Disabled entirely without explicitly enabled local development mode.
+if os.getenv("LOCOMISSION_DEV_MODE", "").lower() == "true":
+    app.mount(
+        "/prototype",
+        StaticFiles(
+            directory=str(Path(__file__).resolve().parents[3] / "prototype"),
+            html=True,
+        ),
+        name="prototype",
+    )
+
 
 
 class LocationReport(BaseModel):
