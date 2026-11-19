@@ -7,3 +7,11 @@ To verify a photo mission, the selected photograph is transmitted to **OpenAI fo
 The player's account, point total and successful mission history persist in PostgreSQL. A logout or 180 seconds without a location report ends the gameplay session and invalidates temporary session records. The maximum cleanup time **X is not yet defined** and must be finalized before these claims are published as a service-level guarantee.
 
 This draft does not yet cover age restrictions, third-party processor terms, security measures, legal bases, billing, data subject rights or jurisdiction-specific legal requirements. Do not ship it as a finished privacy policy.
+
+## Implementation update for technical review
+
+The current API accepts bounded raw image streams, not multipart uploads.
+Application code does not spool images to temporary disk via UploadFile.
+Reverse proxies, transport infrastructure and OpenAI retention must be
+assessed separately. This is not a guarantee that all processing layers
+delete data within X; that maximum period remains undefined.

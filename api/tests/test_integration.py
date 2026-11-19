@@ -267,5 +267,37 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert client.get("/api/me", headers=new_header).json()["display_name"] == "בודק אחת"
         assert client.get("/api/me", headers=a_header).status_code == 401
 
+    # Editorial candidates never enter the game until a named human
+    # verifies source, coordinates, safe site and photo criteria.
+    from locomission.editorial import make_parser, run
+    slug = "human-reviewed-ci-" + str(uuid4())
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            "INSERT INTO missions(slug,title_he,historical_fact_he,"
+            "instructions_he,visual_criteria_he,source_title,source_url,"
+            "status,location,radius_m,points) VALUES "
+            "(%s,'טיוטת בדיקה','עובדה','צלם',ARRAY['תנאי'],"
+            "'מקור בדיקה','https://example.invalid/source','draft',"
+            "ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography,300,7)",
+            (slug, longitude, latitude),
+        )
+    opts = make_parser().parse_args([
+        "approve", slug, "--reviewer", "Human CI fixture",
+        "--lat", str(latitude), "--lon", str(longitude), "--radius-m", "300",
+        "--source-reviewed", "--hebrew-reviewed",
+        "--safe-photo-site-reviewed", "--visual-criteria-reviewed",
+    ])
+    assert run(opts) == 0
+    with pytest.raises(ValueError):
+        run(opts)
+    with psycopg.connect(database_url) as conn:
+        row = conn.execute(
+            "SELECT status,reviewed_by,reviewed_at FROM missions WHERE slug=%s",
+            (slug,),
+        ).fetchone()
+        assert row[0] == "approved"
+        assert row[1] == "Human CI fixture"
+        assert row[2] is not None
+
     # No live location or photo bytes in durable PostgreSQL by design.
 

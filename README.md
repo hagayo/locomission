@@ -76,3 +76,19 @@ Run the add-on migration `db/002_clerk_game.sql` after 001. Review
 `docs/CLERK-SETUP.md` for environment-variable placeholders and the
 historical editorial approval process. Three sourced draft mission candidates
 are in `db/003_historical_candidates.sql`, **not yet approved**.
+
+## Verification uploads and editor review
+
+Photo proof uploads use a bounded raw JPEG/PNG/WebP body, rather than
+multipart form-data. The caller supplies an X-Request-ID UUID header.
+The API rejects bodies above 5 MiB and keeps upload processing in
+application memory; deployments must independently audit proxy buffering
+and OpenAI processor retention before making erasure guarantees.
+
+API request: POST /api/missions/{mission_id}/proof
+Headers: Content-Type: image/jpeg; X-Request-ID: UUID; Authorization: Bearer <Clerk session JWT>; X-Game-Session: <gameplay token>.
+
+See docs/EDITORIAL.md to inspect and manually approve the historical
+drafts only after verifying sources, safe photo locations and Hebrew copy.
+Redis session replacement and location reporting use atomic server-side
+operations to prevent a concurrent logout from reviving an ended session.
