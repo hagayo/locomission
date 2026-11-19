@@ -7,13 +7,15 @@ from pathlib import Path
 from uuid import UUID
 
 import redis
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .domain import challenge_day, mission_is_reachable, utc_now, validate_coordinate
-from .infra import GameStore, SessionExpired, Sessions, SuspiciousLocation
+from .infra import GameStore, PlayerMustConfirmAdult, SessionExpired, Sessions, SuspiciousLocation
+from .clerk_auth import clerk_subject, is_dev_mode
 from .vision import InvalidPhoto, VisionUnavailable, grade_photo, normalize_photo
 
 bearer = HTTPBearer(auto_error=False)
@@ -40,10 +42,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LocoMission Game API",
     version="0.1.0",
-    description="The world is your mission. Development-only identity bootstrap.",
+    description="The world is your mission. Clerk-authenticated Game API.",
     lifespan=lifespan,
 )
 
+
+origins = [o.strip() for o in os.getenv("CLERK_AUTHORIZED_PARTIES", "").split(",") if o.strip()]
+if origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-Game-Session"],
+        allow_credentials=False,
+    )
 
 # Browser prototype only. This is NOT a decision to ship as a PWA.
 # Disabled entirely without explicitly enabled local development mode.
@@ -59,6 +71,14 @@ if os.getenv("LOCOMISSION_DEV_MODE", "").lower() == "true":
 
 
 
+class StartSessionRequest(BaseModel):
+    adult_confirmed: bool = False
+
+
+class ProfileChange(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+
 class LocationReport(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
@@ -67,16 +87,25 @@ class LocationReport(BaseModel):
 
 
 def identity(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
 ) -> tuple[str, dict]:
-    if credentials is None or credentials.scheme.lower() != "bearer":
+    if is_dev_mode():
+        # Only available with a deliberately enabled LOCAL development bypass.
+        token = credentials.credentials if credentials else ""
+        clerk_player = None
+    else:
+        subject = clerk_subject(request)
+        clerk_player = app.state.game.player_id_for_clerk(subject)
+        token = request.headers.get("x-game-session", "")
+    if not token:
         raise HTTPException(status_code=401, detail="נדרש SESSION פעיל")
-    token = credentials.credentials
     data = app.state.sessions.read(token)
     if data is None:
         raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
+    if not is_dev_mode() and (clerk_player is None or data["player_id"] != clerk_player):
+        raise HTTPException(status_code=401, detail="ה-SESSION אינו שייך לחשבון זה")
     return token, data
-
 
 def require_location(session: dict) -> dict:
     loc = session.get("location")
@@ -110,23 +139,28 @@ def product():
 
 
 @app.post("/api/sessions", status_code=201)
-def start_session():
-    # No production login route exists until identity integration is chosen.
-    if os.getenv("LOCOMISSION_DEV_MODE", "").lower() != "true":
-        raise HTTPException(status_code=503, detail="חיבור שחקן דורש מערכת הזדהות")
-    configured = os.getenv("LOCOMISSION_DEV_PLAYER_ID", "")
-    try:
-        player_id = str(UUID(configured))
-    except ValueError:
-        raise HTTPException(status_code=503, detail="מזהה שחקן פיתוח אינו מוגדר")
-    app.state.game.ensure_dev_player(player_id)
+def start_session(request: Request, payload: StartSessionRequest | None = None):
+    if is_dev_mode():
+        configured = os.getenv("LOCOMISSION_DEV_PLAYER_ID", "")
+        try:
+            player_id = str(UUID(configured))
+        except ValueError:
+            raise HTTPException(status_code=503, detail="מזהה שחקן פיתוח אינו מוגדר")
+        app.state.game.ensure_dev_player(player_id)
+    else:
+        subject = clerk_subject(request)
+        try:
+            player_id = app.state.game.player_for_clerk(
+                subject, bool(payload and payload.adult_confirmed)
+            )
+        except PlayerMustConfirmAdult:
+            raise HTTPException(status_code=403, detail="נדרש אישור גיל 18 ומעלה")
     token = app.state.sessions.create(player_id)
     return {
         "session_token": token,
         "expires_after_no_location_seconds": 180,
         "location_permission": "foreground_only",
     }
-
 
 @app.delete("/api/sessions/current")
 def end_session(auth: tuple[str, dict] = Depends(identity)):
@@ -160,6 +194,25 @@ def report_location(
     return {"accepted": True}
 
 
+@app.get("/api/leaderboard")
+def leaderboard():
+    # Durable score data is available even while players are disconnected.
+    return {"leaders": app.state.game.leaderboard()}
+
+
+@app.get("/api/presence")
+def presence(auth: tuple[str, dict] = Depends(identity)):
+    return app.state.sessions.active_presence()
+
+
+@app.patch("/api/me")
+def edit_profile(change: ProfileChange, auth: tuple[str, dict] = Depends(identity)):
+    name = change.display_name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="יש להזין שם תצוגה")
+    return app.state.game.set_player_name(auth[1]["player_id"], name)
+
+
 @app.get("/api/me")
 def my_profile(auth: tuple[str, dict] = Depends(identity)):
     _, session = auth
@@ -176,6 +229,23 @@ def today_missions(auth: tuple[str, dict] = Depends(identity)):
     day = challenge_day(utc_now())
     missions = app.state.game.today(session["player_id"], day, location)
     return {"day_utc": day.isoformat(), "missions": missions, "limit": 3}
+
+
+@app.post("/api/missions/{mission_id}/start")
+def start_mission(mission_id: UUID, auth: tuple[str, dict] = Depends(identity)):
+    _, session = auth
+    player_id = session["player_id"]
+    day = challenge_day(utc_now())
+    loc = require_location(session)
+    mission = app.state.game.proof_mission(player_id, mission_id, day, loc)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="המשימה אינה זמינה")
+    if not mission_is_reachable(
+        mission["distance_m"], mission["radius_m"], loc["accuracy_m"]
+    ):
+        raise HTTPException(status_code=403, detail="אתה מחוץ לאזור המשימה")
+    new_start = app.state.game.start_mission(player_id, mission_id, day)
+    return {"started": True, "first_start_today": new_start}
 
 
 @app.get("/api/groups/nearby")
@@ -223,6 +293,8 @@ def submit_proof(
         mission["distance_m"], mission["radius_m"], location["accuracy_m"],
     ):
         raise HTTPException(status_code=403, detail="אינך בתחום המשימה")
+    if not app.state.game.mission_started(player_id, mission_id, day):
+        raise HTTPException(status_code=409, detail="יש להתחיל את המשימה לפני הצילום")
     if app.state.game.completed(player_id, mission_id, day):
         return {"accepted": True, "awarded": False, "points": 0,
                 "reason_he": "כבר קיבלת נקודות על המשימה היום"}

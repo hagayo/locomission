@@ -24,6 +24,10 @@ class SuspiciousLocation(ValueError):
     pass
 
 
+class PlayerMustConfirmAdult(ValueError):
+    pass
+
+
 class Sessions:
     """Bearer token never appears in the database or in Redis in plaintext."""
 
@@ -129,6 +133,41 @@ class Sessions:
     def forget_photo(self, token: str, photo_hash: str) -> None:
         self.redis.srem(self.proof_key(self.digest(token)), photo_hash)
 
+    def active_presence(self, limit: int = 500) -> dict:
+        """Public 100-ish-meter coarse cells, no player identifiers.
+
+        SCAN is intentionally unoptimized: limited pilot workload only.
+        No persistent index is needed, so expired sessions leave no orphan
+        location entries.
+        """
+        grouped = {}
+        scanned = 0
+        for key in self.redis.scan_iter(match="lm:session:*", count=200):
+            scanned += 1
+            if scanned > 10_000:
+                break
+            raw = self.redis.get(key)
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+                if is_session_expired(data["last_report"], time.time()):
+                    continue
+                loc = data.get("location")
+                if loc is None:
+                    continue
+                if self.redis.get(self.player_key(data["player_id"])) != key.removeprefix("lm:session:"):
+                    continue
+                cell = (round(loc["lat"], 3), round(loc["lon"], 3))
+                grouped[cell] = grouped.get(cell, 0) + 1
+            except (KeyError, ValueError, TypeError):
+                continue
+        values = [
+            {"lat": lat, "lon": lon, "players": count}
+            for (lat, lon), count in grouped.items()
+        ]
+        return {"cells": values[:limit], "truncated": len(values) > limit or scanned > 10_000}
+
     def end(self, token: str) -> None:
         fingerprint = self.digest(token)
         raw = self.redis.get(self.session_key(fingerprint))
@@ -165,11 +204,85 @@ class GameStore:
                 (UUID(player_id),),
             )
 
+    def player_for_clerk(self, clerk_id: str, adult_confirmed: bool) -> str:
+        """Create exactly one durable player per signed Clerk account.
+
+        The caller is responsible for JWT verification. This method must
+        never accept a client-provided user identifier.
+        """
+        with self.pool.connection() as conn:
+            with conn.transaction():
+                row = conn.execute(
+                    "INSERT INTO players(clerk_user_id,display_name,adult_confirmed_at) "
+                    "VALUES (%s,'שחקן חדש',CASE WHEN %s THEN now() ELSE NULL END) "
+                    "ON CONFLICT (clerk_user_id) DO UPDATE SET "
+                    "adult_confirmed_at=COALESCE(players.adult_confirmed_at, "
+                    "CASE WHEN %s THEN now() ELSE NULL END) "
+                    "RETURNING id::text AS id, adult_confirmed_at",
+                    (clerk_id, adult_confirmed, adult_confirmed),
+                ).fetchone()
+                if row["adult_confirmed_at"] is None:
+                    raise PlayerMustConfirmAdult()
+                return row["id"]
+
+    def player_id_for_clerk(self, clerk_id: str) -> str | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "SELECT id::text AS id FROM players "
+                "WHERE clerk_user_id=%s AND adult_confirmed_at IS NOT NULL",
+                (clerk_id,),
+            ).fetchone()
+            return row["id"] if row else None
+
+    def set_player_name(self, player_id: str, name: str) -> dict[str, Any]:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "UPDATE players SET display_name=%s WHERE id=%s",
+                (name, UUID(player_id)),
+            )
+        return self.profile(player_id)
+
+    def leaderboard(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "SELECT display_name,total_points,missions_started,"
+                "completed_missions FROM players "
+                "WHERE adult_confirmed_at IS NOT NULL OR clerk_user_id IS NULL "
+                "ORDER BY total_points DESC,completed_missions DESC,id LIMIT %s",
+                (limit,),
+            ).fetchall()
+
+    def mission_started(self, player_id: str, mission_id: UUID,
+                        day: date) -> bool:
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM mission_starts WHERE player_id=%s "
+                "AND mission_id=%s AND challenge_day=%s",
+                (UUID(player_id), mission_id, day),
+            ).fetchone() is not None
+
+    def start_mission(self, player_id: str, mission_id: UUID, day: date) -> bool:
+        """One durable participation increment per player/mission/day."""
+        with self.pool.connection() as conn:
+            with conn.transaction():
+                created = conn.execute(
+                    "INSERT INTO mission_starts(player_id,mission_id,challenge_day) "
+                    "VALUES (%s,%s,%s) ON CONFLICT DO NOTHING RETURNING player_id",
+                    (UUID(player_id), mission_id, day),
+                ).fetchone()
+                if created:
+                    conn.execute(
+                        "UPDATE players SET missions_started=missions_started+1 "
+                        "WHERE id=%s", (UUID(player_id),),
+                    )
+                return bool(created)
+
     def profile(self, player_id: str) -> dict[str, Any] | None:
         with self.pool.connection() as conn:
             return conn.execute(
-                "SELECT id::text AS id, display_name, total_points, "
-                "completed_missions FROM players WHERE id=%s",
+                "SELECT id::text AS id, display_name,total_points,completed_missions, "
+                "missions_started,credits_balance,plan_code,avatar_url,settings "
+                "FROM players WHERE id=%s",
                 (UUID(player_id),),
             ).fetchone()
 
