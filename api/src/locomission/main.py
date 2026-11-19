@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .config import load_runtime
 from .domain import challenge_day, mission_is_reachable, utc_now, validate_coordinate
 from .infra import GameStore, PlayerMustConfirmAdult, SessionExpired, Sessions, SuspiciousLocation
 from .clerk_auth import clerk_subject, is_dev_mode
@@ -28,27 +29,20 @@ bearer = HTTPBearer(auto_error=False)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    database_url = os.getenv("DATABASE_URL")
-    redis_url = os.getenv("REDIS_URL")
-    if not database_url or not redis_url:
-        raise RuntimeError("DATABASE_URL and REDIS_URL must be configured")
-    game = GameStore(database_url)
-    cache = redis.Redis.from_url(redis_url, decode_responses=True)
-    app.state.game = game
-    app.state.cache = cache
-    app.state.sessions = Sessions(cache)
+    config = load_runtime()  # Fail before opening a pool on invalid deployment.
+    game = GameStore(config.database_url)
     try:
-        slots = int(os.getenv("LOCOMISSION_MAX_VISION_CONCURRENCY", "4"))
-    except ValueError as exc:
-        raise RuntimeError("Invalid LOCOMISSION_MAX_VISION_CONCURRENCY") from exc
-    if not 1 <= slots <= 32:
-        raise RuntimeError("Vision concurrency limit must be between 1 and 32")
-    app.state.vision_slots = BoundedSemaphore(slots)
-    try:
-        yield
+        cache = redis.Redis.from_url(config.redis_url, decode_responses=True)
+        try:
+            app.state.game = game
+            app.state.cache = cache
+            app.state.sessions = Sessions(cache)
+            app.state.vision_slots = BoundedSemaphore(config.vision_concurrency)
+            yield
+        finally:
+            cache.close()
     finally:
         game.close()
-        cache.close()
 
 
 app = FastAPI(
