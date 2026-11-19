@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import os
+from threading import BoundedSemaphore
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import redis
+import psycopg
+from psycopg_pool import PoolTimeout
+from fastapi.responses import JSONResponse
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +38,13 @@ async def lifespan(app: FastAPI):
     app.state.cache = cache
     app.state.sessions = Sessions(cache)
     try:
+        slots = int(os.getenv("LOCOMISSION_MAX_VISION_CONCURRENCY", "4"))
+    except ValueError as exc:
+        raise RuntimeError("Invalid LOCOMISSION_MAX_VISION_CONCURRENCY") from exc
+    if not 1 <= slots <= 32:
+        raise RuntimeError("Vision concurrency limit must be between 1 and 32")
+    app.state.vision_slots = BoundedSemaphore(slots)
+    try:
         yield
     finally:
         game.close()
@@ -57,6 +68,24 @@ if origins:
         allow_headers=["Authorization", "Content-Type", "X-Game-Session", "X-Request-ID"],
         allow_credentials=False,
     )
+
+@app.exception_handler(redis.exceptions.RedisError)
+async def redis_unavailable(_request: Request, _exc: redis.exceptions.RedisError):
+    # Never expose connection strings or tokens in an error response.
+    return JSONResponse(
+        status_code=503, content={"detail": "שירות המשחק אינו זמין זמנית"},
+        headers={"Retry-After": "3"},
+    )
+
+
+@app.exception_handler(psycopg.OperationalError)
+@app.exception_handler(PoolTimeout)
+async def database_unavailable(_request: Request, _exc: Exception):
+    return JSONResponse(
+        status_code=503, content={"detail": "מסד הנתונים אינו זמין זמנית"},
+        headers={"Retry-After": "3"},
+    )
+
 
 # Browser prototype only. This is NOT a decision to ship as a PWA.
 # Disabled entirely without explicitly enabled local development mode.
@@ -416,15 +445,26 @@ async def submit_proof(
                 status_code=409, detail="התמונה כבר נשלחה ב-SESSION הזה",
             )
 
-        try:
-            verdict = await run_in_threadpool(
-                grade_photo, cleaned, mission["title_he"],
-                mission["instructions_he"], mission["visual_criteria_he"],
-            )
-        except VisionUnavailable:
+        # Per-process capacity limit prevents bursts from exhausting the
+        # vision thread pool or creating uncontrolled simultaneous API costs.
+        # Production multi-worker deployments additionally need central limits.
+        if not app.state.vision_slots.acquire(blocking=False):
             raise HTTPException(
-                status_code=503, detail="אימות התמונה אינו זמין כעת",
+                status_code=429, detail="מערכת אימות התמונות עמוסה כרגע",
+                headers={"Retry-After": "2"},
             )
+        try:
+            try:
+                verdict = await run_in_threadpool(
+                    grade_photo, cleaned, mission["title_he"],
+                    mission["instructions_he"], mission["visual_criteria_he"],
+                )
+            except VisionUnavailable:
+                raise HTTPException(
+                    status_code=503, detail="אימות התמונה אינו זמין כעת",
+                )
+        finally:
+            app.state.vision_slots.release()
 
         if not verdict.accepted:
             outcome = {"accepted": False, "awarded": False, "points": 0,

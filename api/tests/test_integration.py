@@ -219,6 +219,17 @@ def test_full_solo_and_group_flow(monkeypatch):
             content=b"x" * (5 * 1024 * 1024 + 1),
         )
         assert oversize.status_code == 413
+        # Backpressure responds before any OpenAI call and is retryable.
+        from threading import BoundedSemaphore
+        saved_slots = app.state.vision_slots
+        app.state.vision_slots = BoundedSemaphore(1)
+        assert app.state.vision_slots.acquire(blocking=False)
+        busy = submit(group_only)
+        assert busy.status_code == 429
+        assert busy.headers["Retry-After"] == "2"
+        app.state.vision_slots.release()
+        app.state.vision_slots = saved_slots
+
         # A transient model failure must release the lease and photo hash.
         from locomission.vision import VisionUnavailable
 

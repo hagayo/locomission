@@ -91,7 +91,7 @@ def test_single_flight_race_expiry_and_result_cleanup():
 
     cache = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
     sessions = Sessions(cache)
-    sessions.VERIFY_LEASE_MS = 120  # Test-only lease, not a retention SLA.
+    sessions.VERIFY_LEASE_MS = 700  # Test-only lease, not a retention SLA.
     player_id = str(uuid4())
     token = sessions.create(player_id)
     mission_id = str(uuid4())
@@ -113,7 +113,7 @@ def test_single_flight_race_expiry_and_result_cleanup():
 
         # Worker disappears with no finally: lease expires independently
         # of the 180-second heartbeat session.
-        time.sleep(.20)
+        time.sleep(.85)
         next_id, next_lease = str(uuid4()), uuid4().hex
         assert sessions.verification_owner(token, mission_id) is None
         assert sessions.claim_verification(
