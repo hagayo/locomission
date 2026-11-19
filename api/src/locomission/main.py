@@ -66,6 +66,17 @@ if origins:
         allow_credentials=False,
     )
 
+@app.middleware("http")
+async def protect_api_headers(request: Request, call_next):
+    """Prevent caching sensitive account/session and proof responses."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 @app.exception_handler(redis.exceptions.RedisError)
 async def redis_unavailable(_request: Request, _exc: redis.exceptions.RedisError):
     # Never expose connection strings or tokens in an error response.

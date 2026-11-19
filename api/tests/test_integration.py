@@ -128,6 +128,8 @@ def test_full_solo_and_group_flow(monkeypatch):
         assert client.get("/api/me").status_code == 401
         session = client.post("/api/sessions")
         assert session.status_code == 201, session.text
+        assert session.headers["Cache-Control"] == "no-store"
+        assert session.headers["X-Content-Type-Options"] == "nosniff"
         token = session.json()["session_token"]
         header = {"Authorization": "Bearer " + token}
 

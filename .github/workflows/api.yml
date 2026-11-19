@@ -92,7 +92,11 @@ jobs:
         with:
           node-version: "22"
       - name: JavaScript syntax
-        run: node --check src/main.js && node --check src/proofRecovery.js
+        run: |
+          node --check src/main.js
+          node --check src/apiClient.js
+          node --check src/profile.js
+          node --check src/proofRecovery.js
       - name: Frontend recovery tests
         run: npm test
       - name: Install frontend dependencies
