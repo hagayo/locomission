@@ -404,9 +404,16 @@ async function handlePendingProof(recover = false) {
     showProofResult(decision.outcome);
   } catch (error) {
     if (app.session !== initialSession || app.pendingProof !== pending) return;
-    if ([400, 413, 415, 422].includes(error.status)) {
+    const duplicatePhoto = error.status === 409 &&
+      error.message.includes("התמונה כבר נשלחה");
+    if ([400, 403, 404, 413, 415, 422].includes(error.status) || duplicatePhoto) {
+      // A permanent validation/location failure needs a fresh photo or mission.
       app.pendingProof = null;
       reportError(error.message);
+    } else if (error.status === 429) {
+      reportError("שירות בדיקת התמונות עמוס. נסה לבדוק שוב בעוד רגע.");
+    } else if (error.status === 409) {
+      reportError("כבר מתבצע אימות למשימה. אפשר לבדוק את התוצאה שוב.");
     } else {
       // No second photo is required. The same UUID can be polled and retried.
       reportError("התקשורת נקטעה או שהאימות לא הושלם. לחץ שוב לבדיקת התוצאה.");
