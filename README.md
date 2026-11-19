@@ -24,7 +24,7 @@ Requires Python 3.12+, PostgreSQL with PostGIS, and Redis. Do not expose the dev
 2. `cd api && python -m venv .venv`, activate it, then `pip install -e ".[test]"`.
 3. Copy `api/.env.example` to a private local environment configuration and export those variables to the process. Set `LOCOMISSION_DEV_MODE=true` and `LOCOMISSION_DEV_PLAYER_ID` to a newly generated UUID (only locally).
 4. Start `uvicorn locomission.main:app --reload` from `api/`. The server documents its endpoints at `/docs`.
-5. `pytest` checks pure domain rules. End-to-end tests against PostgreSQL/Redis/OpenAI are still required.
+5. `pytest` runs automated unit tests and PostGIS/Redis integration checks; live OpenAI calls are not made in CI.
 
 `OPENAI_API_KEY` is required for actual visual grading. No live model call is made without it. **No historical missions are seeded automatically:** source-supported, human-reviewed content must be added before playable results appear.
 
@@ -35,7 +35,7 @@ Requires Python 3.12+, PostgreSQL with PostGIS, and Redis. Do not expose the dev
 - At most **three curated, approved, nearby missions** are assigned per player per UTC day (a provisional daily reset convention).
 - No score on a failed/duplicate verification.
 - Image analysis uses **GPT-4o mini vision**, not image generation.
-- Authentication, billing, native client, complete privacy policy and production deployment are not yet implemented.
+- Clerk authentication is implemented but not verified against a live tenant; billing, native Android, a final privacy policy and live production deployment remain pending.
 
 The backend framework is an implementation vehicle for the first slice, not a decision about Android native versus Web/PWA.
 
@@ -117,3 +117,13 @@ award from PostgreSQL even when the Redis result cache was unavailable.
 
 See [docs/RESILIENCE.md](docs/RESILIENCE.md) for the detailed state machine,
 known limitations, fault-injection tests and safe local load-benchmark commands.
+
+
+## Deployment: Render API + GitHub Pages
+
+The root `Dockerfile` builds a non-root FastAPI container. `render.yaml` defines
+one paid Render web service and external PostgreSQL/PostGIS + Redis URLs.
+`mobile/` is built with Vite for GitHub Pages under `/locomission/`.
+Publishing is **manual**, and credentials must be configured outside Git.
+
+See [deployment setup](docs/DEPLOY-RENDER-PAGES.md).
