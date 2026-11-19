@@ -377,7 +377,7 @@ class Sessions:
                 members = members[:self.PRESENCE_MAX_CANDIDATES]
             for digest in members:
                 if digest != viewer_digest:
-                    candidates[digest] = bucket
+                    candidates.setdefault(digest, bucket)
         if not candidates:
             return {"cells": [], "truncated": truncated}
 

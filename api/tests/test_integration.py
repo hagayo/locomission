@@ -71,6 +71,57 @@ def test_full_solo_and_group_flow(monkeypatch):
             (longitude, latitude),
         ).fetchone()[0]
 
+
+    # Discover at 10 km, but enforce the smaller mission geofence at start.
+    # A first visit with one available mission must not freeze all 3 slots.
+    from locomission.domain import challenge_day, mission_is_reachable, utc_now
+    day_for_discovery = challenge_day(utc_now())
+    explorer = uuid4()
+    isolated_missions = []
+    with psycopg.connect(database_url) as conn:
+        conn.execute(
+            "INSERT INTO players(id,display_name) VALUES (%s,'Explorer fixture')",
+            (explorer,),
+        )
+        for latitude_m in (31.04, 31.32, 31.33):
+            isolated_missions.append(conn.execute(
+                "INSERT INTO missions "
+                "(slug,title_he,historical_fact_he,instructions_he,"
+                "visual_criteria_he,source_title,source_url,reviewed_by,reviewed_at,"
+                "status,location,radius_m,points) VALUES "
+                "(%s,'גילוי','עובדה','צלם',ARRAY['תנאי'],'CI',"
+                "'https://example.invalid/ci','CI',now(),'approved',"
+                "ST_SetSRID(ST_MakePoint(34.0,%s),4326)::geography,150,7) "
+                "RETURNING id",
+                ("discovery-ci-" + str(uuid4()), latitude_m),
+            ).fetchone()[0])
+    location_a = {"lat": 31.0, "lon": 34.0, "accuracy_m": 350}
+    location_b = {"lat": 31.30, "lon": 34.0, "accuracy_m": 15}
+    game = app.state.game
+    discovered = game.today(str(explorer), day_for_discovery, location_a)
+    assert [UUID(m["id"]) for m in discovered] == isolated_missions[:1]
+    assert [UUID(m["id"]) for m in game.today(
+        str(explorer), day_for_discovery, location_a
+    )] == isolated_missions[:1]
+    listed = game.proof_mission(
+        str(explorer), isolated_missions[0], day_for_discovery, location_a
+    )
+    assert listed is not None
+    assert not mission_is_reachable(
+        listed["distance_m"], listed["radius_m"], location_a["accuracy_m"]
+    )
+    filled = game.today(str(explorer), day_for_discovery, location_b)
+    assert {UUID(m["id"]) for m in filled} == set(isolated_missions)
+    assert [m["slot"] for m in filled] == [1, 2, 3]
+    assert [m["id"] for m in game.today(
+        str(explorer), day_for_discovery, location_a
+    )] == [m["id"] for m in filled]
+    with psycopg.connect(database_url) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM daily_assignments WHERE player_id=%s "
+            "AND challenge_day=%s", (explorer, day_for_discovery),
+        ).fetchone()[0] == 3
+
     with TestClient(app) as client:
         assert client.get("/api/me").status_code == 401
         session = client.post("/api/sessions")

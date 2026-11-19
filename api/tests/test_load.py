@@ -54,11 +54,13 @@ def test_redis_presence_load_and_cleanup(capsys):
                 range(600),
             ))
             assert all(value is not None for value in checked)
+            viewer = {"lat": 32.0853, "lon": 34.7818, "accuracy_m": 12}
             maps = list(executor.map(
-                lambda _: record(sessions.active_presence),
+                lambda _: record(sessions.active_presence, tokens[0], viewer),
                 range(24),
             ))
-            assert all(any(cell["players"] >= 80 for cell in m["cells"]) for m in maps)
+            # The observing player sees the other 79 players, never itself.
+            assert all(any(cell["players"] >= 79 for cell in m["cells"]) for m in maps)
         seconds = time.perf_counter() - begin
         print(
             "LOAD SMOKE redis", "requests", len(samples),
@@ -175,4 +177,70 @@ def test_redis_failure_never_returns_lease(monkeypatch):
     finally:
         monkeypatch.undo()
         sessions.end(token)
+        cache.close()
+
+
+def test_local_geo_presence_no_global_scan_and_cleanup(monkeypatch):
+    """Only nearby players appear; no stale identity/coordinate is returned."""
+    import redis
+    from locomission.infra import Sessions
+
+    cache = redis.Redis.from_url(os.environ["REDIS_URL"], decode_responses=True)
+    sessions = Sessions(cache)
+    identities = [str(uuid4()) for _ in range(4)]
+    viewer, near, far, replacement = [sessions.create(i) for i in identities]
+    center = {"lat": 32.0853, "lon": 34.7818, "accuracy_m": 10}
+    try:
+        assert sessions.report(viewer, **center)
+        assert sessions.report(near, 32.0857, 34.7818, 10)
+        assert sessions.report(far, 32.13, 34.7818, 10)
+        # Presence must not traverse all Redis keys or scan all session keys.
+        def forbidden_scan(*_args, **_kwargs):
+            raise AssertionError("Global Redis SCAN is prohibited for presence")
+
+        monkeypatch.setattr(cache, "scan_iter", forbidden_scan)
+        visible = sessions.active_presence(viewer, center)
+        assert visible["truncated"] is False
+        assert visible["cells"] == [
+            {"lat": 32.086, "lon": 34.782, "players": 1}
+        ]
+        digest = sessions.digest(near)
+        bucket = sessions.read(near)["presence_bucket"]
+        geo_key = sessions.presence_key(bucket)
+        assert cache.zscore(geo_key, digest) is not None
+        assert 0 < cache.ttl(geo_key) <= sessions.PRESENCE_INDEX_TTL_SECONDS
+
+        # Same player opens a new session: old map membership is removed.
+        replacement_near = sessions.create(identities[1])
+        try:
+            assert sessions.read(near) is None
+            assert cache.zscore(geo_key, digest) is None
+            assert sessions.active_presence(viewer, center)["cells"] == []
+            assert sessions.report(replacement_near, 32.0858, 34.7818, 10)
+            assert len(sessions.active_presence(viewer, center)["cells"]) == 1
+            fingerprint = sessions.digest(replacement_near)
+            new_bucket = sessions.read(replacement_near)["presence_bucket"]
+            sessions.end(replacement_near)
+            assert cache.zscore(
+                sessions.presence_key(new_bucket), fingerprint
+            ) is None
+            assert sessions.active_presence(viewer, center)["cells"] == []
+        finally:
+            sessions.end(replacement_near)
+
+        # Expired SESSIONs remain invisible even before their bucket TTL.
+        # The bucket itself always has a finite TTL (no permanent GEO keys).
+        stale = sessions.create(identities[3])
+        try:
+            assert sessions.report(stale, 32.0858, 34.7818, 10)
+            key = sessions.session_key(sessions.digest(stale))
+            cache.expire(key, 1)
+            import time
+            time.sleep(1.1)
+            assert sessions.active_presence(viewer, center)["cells"] == []
+        finally:
+            sessions.end(stale)
+    finally:
+        for token in (viewer, near, far, replacement):
+            sessions.end(token)
         cache.close()
