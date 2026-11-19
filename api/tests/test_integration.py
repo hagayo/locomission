@@ -331,19 +331,24 @@ def test_full_solo_and_group_flow(monkeypatch):
         expected = uuid4()
         real_cache = app.state.sessions.cache_proof_result
 
+        import redis as redis_module
+
         def simulate_lost_response(*_args):
-            raise RuntimeError("Response interrupted after SQL COMMIT")
+            raise redis_module.exceptions.ConnectionError(
+                "Simulated Redis outage after SQL COMMIT",
+            )
 
         monkeypatch.setattr(
             app.state.sessions, "cache_proof_result", simulate_lost_response,
         )
-        with pytest.raises(RuntimeError, match="SQL COMMIT"):
-            client.post(
-                "/api/missions/" + str(solo_id) + "/proof",
-                headers={**h2, "Content-Type": "image/png",
-                         "X-Request-ID": str(expected)},
-                content=image_bytes,
-            )
+        interrupted = client.post(
+            "/api/missions/" + str(solo_id) + "/proof",
+            headers={**h2, "Content-Type": "image/png",
+                     "X-Request-ID": str(expected)},
+            content=image_bytes,
+        )
+        assert interrupted.status_code == 503
+        assert "Redis" not in interrupted.text
         monkeypatch.setattr(
             app.state.sessions, "cache_proof_result", real_cache,
         )

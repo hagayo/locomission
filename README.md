@@ -106,3 +106,14 @@ time. A Redis verification lease with an owner UUID prevents simultaneous
 OpenAI calls and is removed on successful completion, failure, logout,
 replacement or session expiry. Persisted points remain transactionally
 idempotent in PostgreSQL.
+
+## Recovery and load testing
+
+If the mobile connection drops during photo verification, the player can
+tap **בדוק תוצאה**. The client checks the same request ID first and uploads
+again only when the server reports `retry_required`; it never stores
+photo bytes in localStorage/sessionStorage. The API can recover a COMMITTED
+award from PostgreSQL even when the Redis result cache was unavailable.
+
+See [docs/RESILIENCE.md](docs/RESILIENCE.md) for the detailed state machine,
+known limitations, fault-injection tests and safe local load-benchmark commands.

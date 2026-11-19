@@ -47,7 +47,9 @@ jobs:
       - name: Compile
         run: python -m compileall -q src
       - name: Unit and PostGIS/Redis integration tests
-        run: python -m pytest -q
+        run: python -m pytest -q --ignore=tests/test_load.py
+      - name: Measured Redis load and lease recovery smoke
+        run: python -m pytest -q -s tests/test_load.py
 
   mobile-build:
     runs-on: ubuntu-latest

@@ -15,3 +15,16 @@ Application code does not spool images to temporary disk via UploadFile.
 Reverse proxies, transport infrastructure and OpenAI retention must be
 assessed separately. This is not a guarantee that all processing layers
 delete data within X; that maximum period remains undefined.
+
+
+## Result-recovery metadata
+
+The Redis session may temporarily hold a minimal photo-verification verdict
+(accepted/rejected, points, short Hebrew reason) indexed by a random request
+UUID. It contains no image bytes, exact coordinates or EXIF. The result cache
+is deleted with the session and follows its TTL. Awarded points and mission
+completion records remain durable in PostgreSQL.
+
+If a server worker crashes before it records a rejected verdict, a subsequent
+retry may need a new model call. This is not a promise of exactly-once
+OpenAI billing. The deletion SLA X remains undecided.
