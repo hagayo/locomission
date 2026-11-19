@@ -51,9 +51,11 @@ class Sessions:
         return "lm:proof-fingerprints:" + digest
 
     def create(self, player_id: str) -> str:
-        previous = self.redis.get(self.player_key(player_id))
-        if previous:
-            self.redis.delete(self.session_key(previous), self.proof_key(previous))
+        """Replace an existing gameplay session in one Redis transaction.
+
+        A concurrent logout or location report cannot resurrect the prior
+        session after a newer session has been created.
+        """
         token = secrets.token_urlsafe(32)
         fingerprint = self.digest(token)
         data = {
@@ -62,69 +64,104 @@ class Sessions:
             "last_report": time.time(),
             "location": None,
         }
-        with self.redis.pipeline(transaction=True) as p:
-            p.set(self.session_key(fingerprint), json.dumps(data),
-                  ex=INACTIVITY_SECONDS)
-            p.set(self.player_key(player_id), fingerprint,
-                  ex=INACTIVITY_SECONDS)
-            p.execute()
+        self.redis.eval(
+            """
+            local old = redis.call('GET', KEYS[1])
+            if old then
+                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old)
+            end
+            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[5])
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[5])
+            return 1
+            """,
+            2, self.player_key(player_id), self.session_key(fingerprint),
+            fingerprint, json.dumps(data), "lm:session:",
+            "lm:proof-fingerprints:", INACTIVITY_SECONDS,
+        )
         return token
 
     def read(self, token: str) -> dict[str, Any] | None:
+        """No session is valid without its owner index and live report TTL."""
         fingerprint = self.digest(token)
         raw = self.redis.get(self.session_key(fingerprint))
         if not raw:
             return None
-        data = json.loads(raw)
-        if (
-            is_session_expired(data["last_report"], time.time())
-            or self.redis.get(self.player_key(data["player_id"])) != fingerprint
-        ):
+        try:
+            data = json.loads(raw)
+            if (
+                is_session_expired(data["last_report"], time.time())
+                or self.redis.get(self.player_key(data["player_id"])) != fingerprint
+            ):
+                self.end(token)
+                return None
+            return data
+        except (ValueError, TypeError, KeyError):
             self.end(token)
             return None
-        return data
 
     def report(self, token: str, lat: float, lon: float,
                accuracy_m: float) -> dict[str, Any] | None:
+        """Compare-and-set prevents races with logout, replacement and GPS."""
         validate_coordinate(lat, lon, accuracy_m)
-        data = self.read(token)
-        if data is None:
-            return None
-        instant = time.time()
-        new_location = {"lat": lat, "lon": lon, "accuracy_m": accuracy_m}
-        if not plausible_movement(
-            data["location"], new_location, instant - data["last_report"]
-        ):
-            raise SuspiciousLocation("Implausible location jump")
-        data["last_report"] = instant
-        data["location"] = new_location
         fingerprint = self.digest(token)
-        with self.redis.pipeline(transaction=True) as p:
-            p.set(self.session_key(fingerprint), json.dumps(data),
-                  ex=INACTIVITY_SECONDS)
-            p.expire(self.player_key(data["player_id"]), INACTIVITY_SECONDS)
-            p.expire(self.proof_key(fingerprint), INACTIVITY_SECONDS)
-            p.execute()
-        return data
+        key = self.session_key(fingerprint)
+        raw = self.redis.get(key)
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            instant = time.time()
+            if is_session_expired(data["last_report"], instant):
+                self.end(token)
+                return None
+            new_location = {"lat": lat, "lon": lon, "accuracy_m": accuracy_m}
+            if not plausible_movement(
+                data["location"], new_location, instant - data["last_report"]
+            ):
+                raise SuspiciousLocation("Implausible location jump")
+            data["last_report"] = instant
+            data["location"] = new_location
+            # All three changes are atomic. No create-after-logout gap.
+            result = self.redis.eval(
+                """
+                local old = redis.call('GET', KEYS[1])
+                if not old or old ~= ARGV[1] then return 0 end
+                if redis.call('GET', KEYS[2]) ~= ARGV[3] then return 0 end
+                redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[4])
+                redis.call('EXPIRE', KEYS[2], ARGV[4])
+                if redis.call('EXISTS', KEYS[3]) == 1 then
+                    redis.call('EXPIRE', KEYS[3], ARGV[4])
+                end
+                return 1
+                """,
+                3, key, self.player_key(data["player_id"]),
+                self.proof_key(fingerprint),
+                raw, json.dumps(data), fingerprint, INACTIVITY_SECONDS,
+            )
+            return data if result == 1 else None
+        except (ValueError, TypeError, KeyError):
+            return None
 
     def claim_photo(self, token: str, photo_bytes: bytes) -> tuple[bool, str]:
-        """Atomic replay claim. The fingerprint cannot outlive its SESSION."""
+        """Atomic, session-scoped replay hash, with no stored image bytes."""
+        data = self.read(token)
+        if data is None:
+            raise SessionExpired("Session ended before photo claim")
         fingerprint = self.digest(token)
         photo_hash = hashlib.sha256(photo_bytes).hexdigest()
-        # Synchronize expiry with the remaining session TTL, not a new
-        # 180-second TTL starting when the player takes a photograph.
         added = self.redis.eval(
             """
             local ttl = redis.call('PTTL', KEYS[1])
             if ttl <= 0 then return -1 end
-            local created = redis.call('SADD', KEYS[2], ARGV[1])
-            redis.call('PEXPIRE', KEYS[2], ttl)
+            if redis.call('GET', KEYS[2]) ~= ARGV[2] then return -1 end
+            local created = redis.call('SADD', KEYS[3], ARGV[1])
+            redis.call('PEXPIRE', KEYS[3], ttl)
             return created
             """,
-            2,
-            self.session_key(fingerprint),
+            3, self.session_key(fingerprint),
+            self.player_key(data["player_id"]),
             self.proof_key(fingerprint),
-            photo_hash,
+            photo_hash, fingerprint,
         )
         if added == -1:
             raise SessionExpired("Session ended before photo claim")
@@ -169,14 +206,30 @@ class Sessions:
         return {"cells": values[:limit], "truncated": len(values) > limit or scanned > 10_000}
 
     def end(self, token: str) -> None:
+        """Delete session + proof hash and only the matching owner pointer."""
         fingerprint = self.digest(token)
         raw = self.redis.get(self.session_key(fingerprint))
-        player_id = json.loads(raw)["player_id"] if raw else None
-        with self.redis.pipeline(transaction=True) as p:
-            p.delete(self.session_key(fingerprint), self.proof_key(fingerprint))
-            if player_id and self.redis.get(self.player_key(player_id)) == fingerprint:
-                p.delete(self.player_key(player_id))
-            p.execute()
+        if not raw:
+            self.redis.delete(self.proof_key(fingerprint))
+            return
+        try:
+            player_id = json.loads(raw)["player_id"]
+        except (ValueError, TypeError, KeyError):
+            self.redis.delete(self.session_key(fingerprint), self.proof_key(fingerprint))
+            return
+        self.redis.eval(
+            """
+            redis.call('DEL', KEYS[1], KEYS[3])
+            if redis.call('GET', KEYS[2]) == ARGV[1] then
+                redis.call('DEL', KEYS[2])
+            end
+            return 1
+            """,
+            3, self.session_key(fingerprint),
+            self.player_key(player_id), self.proof_key(fingerprint),
+            fingerprint,
+        )
+
 
 
 class GameStore:
