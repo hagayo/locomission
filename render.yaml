@@ -1,0 +1,32 @@
+# Render hosts the API only; GitHub Pages builds and hosts mobile/.
+# PostgreSQL/PostGIS and Redis are EXTERNAL, provided by the operator.
+services:
+  - type: web
+    name: locomission-api
+    runtime: docker
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: 0.5c-512mb
+    numInstances: 1
+    healthCheckPath: /api/health
+    autoDeployTrigger: off
+    envVars:
+      - key: LOCOMISSION_ENV
+        value: staging
+      - key: LOCOMISSION_DEV_MODE
+        value: "false"
+      - key: LOCOMISSION_MAX_VISION_CONCURRENCY
+        value: "2"
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_JWT_KEY
+        sync: false
+      - key: CLERK_AUTHORIZED_PARTIES
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

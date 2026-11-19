@@ -47,12 +47,14 @@ def test_staging_fails_closed(changed):
         load_runtime({**staging_config(), **changed})
 
 
-def test_cloud_run_never_uses_local_or_dev_bypass():
+def test_hosted_runtime_never_uses_local_or_dev_bypass():
+    with pytest.raises(RuntimeError):
+        load_runtime({**local_config(), "RENDER_SERVICE_ID": "srv-test"})
+    with pytest.raises(RuntimeError):
+        load_runtime({**staging_config(), "RENDER_SERVICE_ID": "srv-test",
+                      "LOCOMISSION_DEV_MODE": "true"})
     with pytest.raises(RuntimeError):
         load_runtime({**local_config(), "K_SERVICE": "locomission"})
-    with pytest.raises(RuntimeError):
-        load_runtime({**staging_config(), "K_SERVICE": "locomission",
-                      "LOCOMISSION_DEV_MODE": "true"})
 
 
 def test_invalid_connection_scheme_rejected():

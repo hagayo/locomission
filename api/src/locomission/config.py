@@ -25,11 +25,11 @@ def load_runtime(source: Mapping[str, str] | None = None) -> RuntimeConfig:
     if mode not in ("local", "staging", "production"):
         raise RuntimeError("Invalid LOCOMISSION_ENV; expected local, staging or production")
 
-    is_cloud_run = bool(env.get("K_SERVICE"))
-    if is_cloud_run and mode == "local":
-        raise RuntimeError("LOCOMISSION_ENV must be staging/production on Cloud Run")
+    is_hosted = bool(env.get("RENDER_SERVICE_ID") or env.get("K_SERVICE"))
+    if is_hosted and mode == "local":
+        raise RuntimeError("LOCOMISSION_ENV must be staging/production when hosted")
     dev_bypass = env.get("LOCOMISSION_DEV_MODE", "false").strip().lower() == "true"
-    if dev_bypass and (mode != "local" or is_cloud_run):
+    if dev_bypass and (mode != "local" or is_hosted):
         raise RuntimeError("Development auth bypass is forbidden outside local mode")
 
     database_url = env.get("DATABASE_URL", "")
