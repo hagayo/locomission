@@ -222,39 +222,58 @@ class Sessions:
 
 
     def active_presence(self, limit: int = 500) -> dict:
-        """Public 100-ish-meter coarse cells, no player identifiers.
+        """Limited pilot map, batching Redis reads instead of two GETs per user.
 
-        SCAN is intentionally unoptimized: limited pilot workload only.
-        No persistent index is needed, so expired sessions leave no orphan
-        location entries.
+        Each marker is an approximate cell with no player identifiers.
+        No long-lived Redis index is created, so expired sessions disappear.
         """
-        grouped = {}
+        from itertools import islice
+
+        cells: dict[tuple[float, float], int] = {}
+        key_iter = self.redis.scan_iter(match="lm:session:*", count=200)
         scanned = 0
-        for key in self.redis.scan_iter(match="lm:session:*", count=200):
-            scanned += 1
-            if scanned > 10_000:
+        exhausted = False
+        limit = max(1, min(limit, 500))
+        while scanned < 10_000:
+            keys = list(islice(key_iter, min(200, 10_000 - scanned)))
+            if not keys:
+                exhausted = True
                 break
-            raw = self.redis.get(key)
-            if not raw:
+            scanned += len(keys)
+            raws = self.redis.mget(keys)
+            candidates = []
+            now = time.time()
+            for key, raw in zip(keys, raws):
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                    if is_session_expired(data["last_report"], now):
+                        continue
+                    loc = data["location"]
+                    if loc is None:
+                        continue
+                    candidates.append((
+                        key.removeprefix("lm:session:"),
+                        data["player_id"], loc,
+                    ))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if not candidates:
                 continue
-            try:
-                data = json.loads(raw)
-                if is_session_expired(data["last_report"], time.time()):
-                    continue
-                loc = data.get("location")
-                if loc is None:
-                    continue
-                if self.redis.get(self.player_key(data["player_id"])) != key.removeprefix("lm:session:"):
+            owner_keys = [self.player_key(pid) for _, pid, _ in candidates]
+            owners = self.redis.mget(owner_keys)
+            for (fingerprint, _pid, loc), owner in zip(candidates, owners):
+                if owner != fingerprint:
                     continue
                 cell = (round(loc["lat"], 3), round(loc["lon"], 3))
-                grouped[cell] = grouped.get(cell, 0) + 1
-            except (KeyError, ValueError, TypeError):
-                continue
+                cells[cell] = cells.get(cell, 0) + 1
         values = [
             {"lat": lat, "lon": lon, "players": count}
-            for (lat, lon), count in grouped.items()
+            for (lat, lon), count in cells.items()
         ]
-        return {"cells": values[:limit], "truncated": len(values) > limit or scanned > 10_000}
+        return {"cells": values[:limit],
+                "truncated": len(values) > limit or not exhausted}
 
     def end(self, token: str) -> None:
         """Delete session + proof hash and only the matching owner pointer."""

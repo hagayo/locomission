@@ -100,6 +100,15 @@ def test_full_solo_and_group_flow(monkeypatch):
             },
         ).status_code == 400
 
+        lobby = client.get("/api/lobby", headers=header)
+        assert lobby.status_code == 200, lobby.text
+        snapshot = lobby.json()
+        assert len(snapshot["missions"]) == 3
+        assert "total_points" in snapshot["profile"]
+        assert isinstance(snapshot["presence"]["cells"], list)
+        assert isinstance(snapshot["groups"], list)
+        assert all(not m["started_today"] for m in snapshot["missions"])
+
         day = client.get("/api/missions/today", headers=header)
         assert day.status_code == 200, day.text
         assigned = {UUID(m["id"]) for m in day.json()["missions"]}
@@ -143,6 +152,8 @@ def test_full_solo_and_group_flow(monkeypatch):
         )
         assert goal_list.status_code == 200, goal_list.text
         assert goal_list.json()["missions"][0]["id"] == str(group_only)
+        assert goal_list.json()["missions"][0]["started_today"] is False
+        assert goal_list.json()["missions"][0]["completed"] is False
 
         # Starting an eligible mission is durable and idempotent.
         started = client.post(
@@ -150,10 +161,36 @@ def test_full_solo_and_group_flow(monkeypatch):
         )
         assert started.status_code == 200, started.text
         assert started.json()["first_start_today"] is True
+        after_start = client.get(
+            "/api/groups/" + str(group_id) + "/missions", headers=header
+        ).json()["missions"]
+        assert after_start[0]["started_today"] is True
         again = client.post(
             "/api/missions/" + str(group_only) + "/start", headers=header
         )
         assert again.json()["first_start_today"] is False
+        # An in-flight proof blocks another paid model request for this mission.
+        owner = str(uuid4())
+        assert app.state.sessions.claim_verification(
+            token, os.environ["LOCOMISSION_DEV_PLAYER_ID"],
+            str(group_only), owner,
+        ) is True
+        assert app.state.sessions.claim_verification(
+            token, os.environ["LOCOMISSION_DEV_PLAYER_ID"],
+            str(group_only), str(uuid4()),
+        ) is False
+        lock_key = app.state.sessions.verification_key(
+            app.state.sessions.digest(token)
+        )
+        assert 0 < app.state.cache.pttl(lock_key) <= app.state.cache.pttl(
+            app.state.sessions.session_key(app.state.sessions.digest(token))
+        )
+        blocked = submit(group_only)
+        assert blocked.status_code == 409
+        app.state.sessions.release_verification(token, str(group_only), str(uuid4()))
+        assert app.state.cache.hget(lock_key, str(group_only)) == owner
+        app.state.sessions.release_verification(token, str(group_only), owner)
+        assert app.state.cache.exists(lock_key) == 0
         assert client.get("/api/me", headers=header).json()["missions_started"] == 1
 
         unsupported = client.post(
@@ -184,6 +221,11 @@ def test_full_solo_and_group_flow(monkeypatch):
         duplicate = submit(group_only)
         assert duplicate.status_code == 200, duplicate.text
         assert duplicate.json()["points"] == 0
+        group_goals = client.get(
+            "/api/groups/" + str(group_id) + "/missions", headers=header
+        ).json()["missions"]
+        assert group_goals[0]["completed"] is True
+        assert group_goals[0]["completed_by_group"] is True
         profile = client.get("/api/me", headers=header).json()
         assert profile["total_points"] == 7
         assert profile["missions_started"] == 1
@@ -203,6 +245,7 @@ def test_full_solo_and_group_flow(monkeypatch):
 
         assert client.delete("/api/sessions/current", headers=header).json()["ended"]
         assert app.state.cache.exists(app.state.sessions.proof_key(fingerprint)) == 0
+        assert app.state.cache.exists(app.state.sessions.verification_key(fingerprint)) == 0
         assert not client.get("/api/presence", headers=header).status_code == 200
         assert client.get("/api/me", headers=header).status_code == 401
         with psycopg.connect(database_url) as conn:

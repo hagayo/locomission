@@ -92,3 +92,17 @@ See docs/EDITORIAL.md to inspect and manually approve the historical
 drafts only after verifying sources, safe photo locations and Hebrew copy.
 Redis session replacement and location reporting use atomic server-side
 operations to prevent a concurrent logout from reviving an ended session.
+
+## Mobile gameplay efficiency and proof single-flight
+
+The client fetches `/api/lobby` once per foreground location refresh instead
+of fetching missions, groups, profile and presence separately. Public presence
+still uses coarse anonymous cells and is limited to a pilot-sized scan; Redis
+reads are batched. Historical mission start state is included in each mission
+response, so returning from the map or phone camera does not reset progress.
+
+Only one photo can be processed for the same mission in a live SESSION at a
+time. A Redis verification lease with an owner UUID prevents simultaneous
+OpenAI calls and is removed on successful completion, failure, logout,
+replacement or session expiry. Persisted points remain transactionally
+idempotent in PostgreSQL.

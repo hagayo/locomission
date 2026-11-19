@@ -38,13 +38,13 @@ function node(tag, text, cls) {
   return element;
 }
 function addEntry(container, title, detail, end, onClick) {
-  const button = node("button", undefined, "entry");
-  button.type = "button";
+  const element = node(onClick ? "button" : "div", undefined, "entry");
+  if (onClick) element.type = "button";
   const block = node("div");
   block.append(node("strong", title), node("small", detail || ""));
-  button.append(block, node("aside", end || ""));
-  button.addEventListener("click", onClick);
-  container.append(button);
+  element.append(block, node("aside", end || ""));
+  if (onClick) element.addEventListener("click", onClick);
+  container.append(element);
 }
 async function request(path, options = {}, gameSession = true) {
   if (!app.clerk?.session) throw new Error("נדרשת התחברות ל-Clerk");
@@ -228,16 +228,12 @@ window.addEventListener("pagehide", stopLocation);
 async function refreshGame() {
   if (!app.session || !app.ready) return;
   try {
-    const [missions, groups, profile, presence] = await Promise.all([
-      request("/api/missions/today"),
-      request("/api/groups/nearby"),
-      request("/api/me"),
-      request("/api/presence")
-    ]);
-    app.missions = missions.missions;
-    app.groups = groups.groups;
-    app.presence = presence.cells;
-    $("points").textContent = profile.total_points;
+    // One mobile network round-trip; individual API routes remain supported.
+    const snapshot = await request("/api/lobby");
+    app.missions = snapshot.missions;
+    app.groups = snapshot.groups;
+    app.presence = snapshot.presence.cells;
+    $("points").textContent = snapshot.profile.total_points;
     $("actions").hidden = false;
     renderBrowse();
     renderPins();
@@ -298,7 +294,7 @@ function renderBrowse() {
     app.leaders.forEach((leader, index) => addEntry(
       list, (index + 1) + ". " + leader.display_name,
       leader.completed_missions + " משימות הושלמו",
-      leader.total_points + " נקודות", () => {}
+      leader.total_points + " נקודות", null
     ));
   }
 }
