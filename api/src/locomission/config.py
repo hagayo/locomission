@@ -13,6 +13,10 @@ class RuntimeConfig:
     database_url: str
     redis_url: str
     vision_concurrency: int
+    requests_per_minute: int
+    sessions_per_hour: int
+    proofs_per_day: int
+    global_proofs_per_day: int
 
 
 def _present(value: str) -> bool:
@@ -46,6 +50,23 @@ def load_runtime(source: Mapping[str, str] | None = None) -> RuntimeConfig:
     if not 1 <= concurrency <= 32:
         raise RuntimeError("Vision concurrency must be between 1 and 32")
 
+    # Pilot defaults are provisional cost/safety controls, not product
+    # entitlements. Operators may override them with explicit env variables.
+    caps = {}
+    for name, default, max_value in (
+        ("LOCOMISSION_REQUESTS_PER_MINUTE", 360, 10000),
+        ("LOCOMISSION_SESSIONS_PER_HOUR", 30, 1000),
+        ("LOCOMISSION_PROOFS_PER_DAY", 20, 1000),
+        ("LOCOMISSION_GLOBAL_PROOFS_PER_DAY", 250, 100000),
+    ):
+        try:
+            cap = int(env.get(name, str(default)))
+        except ValueError as exc:
+            raise RuntimeError("Invalid numeric limit: " + name) from exc
+        if not 1 <= cap <= max_value:
+            raise RuntimeError("Limit outside permitted range: " + name)
+        caps[name] = cap
+
     if mode in ("staging", "production"):
         secret = env.get("CLERK_SECRET_KEY", "")
         key = env.get("CLERK_JWT_KEY", "").replace("\\n", "\n")
@@ -68,4 +89,10 @@ def load_runtime(source: Mapping[str, str] | None = None) -> RuntimeConfig:
                     or "*" in origin):
                 raise RuntimeError("Only explicit HTTPS frontend origins are allowed")
 
-    return RuntimeConfig(mode, database_url, redis_url, concurrency)
+    return RuntimeConfig(
+        mode, database_url, redis_url, concurrency,
+        caps["LOCOMISSION_REQUESTS_PER_MINUTE"],
+        caps["LOCOMISSION_SESSIONS_PER_HOUR"],
+        caps["LOCOMISSION_PROOFS_PER_DAY"],
+        caps["LOCOMISSION_GLOBAL_PROOFS_PER_DAY"],
+    )
