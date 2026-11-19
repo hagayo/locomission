@@ -18,6 +18,14 @@ services:
         value: "false"
       - key: LOCOMISSION_MAX_VISION_CONCURRENCY
         value: "2"
+      - key: LOCOMISSION_REQUESTS_PER_MINUTE
+        value: "360"
+      - key: LOCOMISSION_SESSIONS_PER_HOUR
+        value: "30"
+      - key: LOCOMISSION_PROOFS_PER_DAY
+        value: "20"
+      - key: LOCOMISSION_GLOBAL_PROOFS_PER_DAY
+        value: "250"
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL

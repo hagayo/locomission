@@ -62,3 +62,22 @@ def test_invalid_connection_scheme_rejected():
         load_runtime({**local_config(), "REDIS_URL": "http://localhost"})
     with pytest.raises(RuntimeError):
         load_runtime({**local_config(), "DATABASE_URL": "sqlite:///db"})
+
+
+@pytest.mark.parametrize("setting,value", [
+    ("LOCOMISSION_REQUESTS_PER_MINUTE", "0"),
+    ("LOCOMISSION_SESSIONS_PER_HOUR", "NaN"),
+    ("LOCOMISSION_PROOFS_PER_DAY", "-1"),
+    ("LOCOMISSION_GLOBAL_PROOFS_PER_DAY", "100001"),
+])
+def test_invalid_pilot_limits_fail_at_startup(setting, value):
+    with pytest.raises(RuntimeError):
+        load_runtime({**local_config(), setting: value})
+
+
+def test_default_pilot_limits_are_bounded():
+    c = load_runtime(local_config())
+    assert c.requests_per_minute == 360
+    assert c.sessions_per_hour == 30
+    assert c.proofs_per_day == 20
+    assert c.global_proofs_per_day == 250

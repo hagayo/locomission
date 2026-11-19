@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .config import load_runtime
+from .limits import RateLimiter
 from .domain import challenge_day, mission_is_reachable, utc_now, validate_coordinate
 from .infra import GameStore, PlayerMustConfirmAdult, SessionExpired, Sessions, SuspiciousLocation
 from .clerk_auth import clerk_subject, is_dev_mode
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI):
             app.state.game = game
             app.state.cache = cache
             app.state.sessions = Sessions(cache)
+            app.state.limiter = RateLimiter(cache)
+            app.state.limits = config
             app.state.vision_slots = BoundedSemaphore(config.vision_concurrency)
             yield
         finally:
@@ -115,6 +118,20 @@ class LocationReport(BaseModel):
     foreground: bool
 
 
+def enforce_budget(player_id: str, action: str, limit: int,
+                   window_seconds: int, global_limit: int | None = None) -> None:
+    decision = app.state.limiter.spend(
+        player_id, action, max_per_player=limit,
+        window_seconds=window_seconds, global_limit=global_limit,
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="בוצעו יותר מדי בקשות. אפשר לנסות שוב בהמשך",
+            headers={"Retry-After": str(decision.retry_after)},
+        )
+
+
 def identity(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
@@ -134,6 +151,10 @@ def identity(
         raise HTTPException(status_code=401, detail="ה-SESSION הסתיים")
     if not is_dev_mode() and (clerk_player is None or data["player_id"] != clerk_player):
         raise HTTPException(status_code=401, detail="ה-SESSION אינו שייך לחשבון זה")
+    enforce_budget(
+        data["player_id"], "requests",
+        app.state.limits.requests_per_minute, 60,
+    )
     return token, data
 
 def require_location(session: dict) -> dict:
@@ -175,9 +196,15 @@ def start_session(request: Request, payload: StartSessionRequest | None = None):
             player_id = str(UUID(configured))
         except ValueError:
             raise HTTPException(status_code=503, detail="מזהה שחקן פיתוח אינו מוגדר")
+        enforce_budget(
+            player_id, "sessions", app.state.limits.sessions_per_hour, 3600,
+        )
         app.state.game.ensure_dev_player(player_id)
     else:
         subject = clerk_subject(request)
+        enforce_budget(
+            subject, "sessions", app.state.limits.sessions_per_hour, 3600,
+        )
         try:
             player_id = app.state.game.player_for_clerk(
                 subject, bool(payload and payload.adult_confirmed)
@@ -503,6 +530,14 @@ async def submit_proof(
                 headers={"Retry-After": "2"},
             )
         try:
+            # Distributed budget: shared by all workers, sessions and
+            # instances. Spend once per *actual* model call, not once per
+            # logical request: upstream failure may still be billable.
+            await run_in_threadpool(
+                enforce_budget, player_id, "vision",
+                app.state.limits.proofs_per_day, 86_400,
+                app.state.limits.global_proofs_per_day,
+            )
             try:
                 verdict = await run_in_threadpool(
                     grade_photo, cleaned, mission["title_he"],
