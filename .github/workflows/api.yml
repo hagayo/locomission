@@ -1,9 +1,9 @@
 name: API checks
 on:
   push:
-    paths: ["api/**", "db/**", "mobile/**", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
   pull_request:
-    paths: ["api/**", "db/**", "mobile/**", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
 jobs:
   unit-and-integration:
     runs-on: ubuntu-latest
@@ -50,6 +50,36 @@ jobs:
         run: python -m pytest -q --ignore=tests/test_load.py
       - name: Measured Redis load and lease recovery smoke
         run: python -m pytest -q -s tests/test_load.py
+      - name: Build API Docker image from repository root
+        working-directory: .
+        run: docker build --tag locomission-api:ci .
+      - name: Check packaged Python and migration CLI
+        working-directory: .
+        run: |
+          docker run --rm --entrypoint python locomission-api:ci -m locomission.migrate --help
+          docker run --rm --entrypoint python locomission-api:ci -c "import locomission.main"
+      - name: Start packaged API with isolated CI services
+        working-directory: .
+        run: |
+          docker run -d --name locomission-api-ci --network host \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e REDIS_URL="$REDIS_URL" \
+            -e LOCOMISSION_ENV=local \
+            -e LOCOMISSION_DEV_MODE=false \
+            -e PORT=8080 locomission-api:ci
+      - name: Smoke-test Dockerized API readiness
+        working-directory: .
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/health; then exit 0; fi
+            sleep 1
+          done
+          echo "API Docker container failed readiness" >&2
+          exit 1
+      - name: Stop packaged API
+        if: always()
+        working-directory: .
+        run: docker rm --force locomission-api-ci || true
 
   mobile-build:
     runs-on: ubuntu-latest
