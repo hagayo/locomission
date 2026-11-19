@@ -8,7 +8,7 @@ A mobile-first, history-driven group game that uses geographical proximity and a
 
 ## Current status
 
-This repository contains **the first backend foundation**, not a production-ready Android application. The user-facing client platform has not been finalized. The first slice includes a PostgreSQL/PostGIS schema, domain constraints and tests, plus an API implementation under \`api/\`.
+This repository contains **the first backend foundation**, not a production-ready Android application. The user-facing client platform has not been finalized. The first slice includes a PostgreSQL/PostGIS schema, domain constraints and tests, plus an API implementation under `api/`.
 
 | Persistent | Temporary |
 | --- | --- |
@@ -20,13 +20,13 @@ Design and decisions: [product contract](docs/PRODUCT-CONTRACT.md), [mobile UX](
 
 Requires Python 3.12+, PostgreSQL with PostGIS, and Redis. Do not expose the development identity mode publicly.
 
-1. Create database and apply \`db/001_initial.sql\` once, e.g. \`psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/001_initial.sql\`.
-2. \`cd api && python -m venv .venv\`, activate it, then \`pip install -e ".[test]"\`.
-3. Copy \`api/.env.example\` to a private local environment configuration and export those variables to the process. Set \`LOCOMISSION_DEV_MODE=true\` and \`LOCOMISSION_DEV_PLAYER_ID\` to a newly generated UUID (only locally).
-4. Start \`uvicorn locomission.main:app --reload\` from \`api/\`. The server documents its endpoints at \`/docs\`.
-5. \`pytest\` checks pure domain rules. End-to-end tests against PostgreSQL/Redis/OpenAI are still required.
+1. Create database and apply `db/001_initial.sql` once, e.g. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/001_initial.sql`.
+2. `cd api && python -m venv .venv`, activate it, then `pip install -e ".[test]"`.
+3. Copy `api/.env.example` to a private local environment configuration and export those variables to the process. Set `LOCOMISSION_DEV_MODE=true` and `LOCOMISSION_DEV_PLAYER_ID` to a newly generated UUID (only locally).
+4. Start `uvicorn locomission.main:app --reload` from `api/`. The server documents its endpoints at `/docs`.
+5. `pytest` checks pure domain rules. End-to-end tests against PostgreSQL/Redis/OpenAI are still required.
 
-\`OPENAI_API_KEY\` is required for actual visual grading. No live model call is made without it. **No historical missions are seeded automatically:** source-supported, human-reviewed content must be added before playable results appear.
+`OPENAI_API_KEY` is required for actual visual grading. No live model call is made without it. **No historical missions are seeded automatically:** source-supported, human-reviewed content must be added before playable results appear.
 
 ## Guardrails
 
@@ -38,3 +38,12 @@ Requires Python 3.12+, PostgreSQL with PostGIS, and Redis. Do not expose the dev
 - Authentication, billing, native client, complete privacy policy and production deployment are not yet implemented.
 
 The backend framework is an implementation vehicle for the first slice, not a decision about Android native versus Web/PWA.
+
+
+## Group mission flow
+
+A group is discoverable near its geographic center, joins are voluntary,
+and its mission list is available at `GET /api/groups/{id}/missions`
+after joining. A verified photo can complete an active group goal even when
+that mission is not one of the player's personal daily three. Shared group
+progress is recorded only once per challenge/mission.

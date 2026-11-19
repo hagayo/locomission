@@ -213,18 +213,29 @@ class GameStore:
 
     def proof_mission(self, player_id: str, mission_id: UUID,
                       day: date, location: dict[str, float]) -> dict[str, Any] | None:
+        """An assigned solo mission OR a joined active group mission."""
         with self.pool.connection() as conn:
             return conn.execute(
                 "SELECT m.id::text AS id, m.title_he, m.instructions_he, "
                 "m.visual_criteria_he, m.points, m.radius_m, "
                 "ST_Distance(m.location, "
                 "ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography) AS distance_m "
-                "FROM daily_assignments a JOIN missions m ON m.id=a.mission_id "
+                "FROM missions m "
+                "WHERE m.id=%s AND m.status='approved' AND m.content_tier='free' "
+                "AND ("
+                "EXISTS (SELECT 1 FROM daily_assignments a "
                 "WHERE a.player_id=%s AND a.challenge_day=%s "
-                "AND m.id=%s AND m.status='approved'",
+                "AND a.mission_id=m.id) "
+                "OR EXISTS (SELECT 1 FROM group_missions gm "
+                "JOIN group_members mb ON mb.challenge_id=gm.challenge_id "
+                "JOIN group_challenges g ON g.id=gm.challenge_id "
+                "WHERE gm.mission_id=m.id AND mb.player_id=%s "
+                "AND g.status='published' "
+                "AND now() BETWEEN g.opens_at AND g.closes_at)"
+                ")",
                 (
-                    location["lon"], location["lat"],
-                    UUID(player_id), day, mission_id,
+                    location["lon"], location["lat"], mission_id,
+                    UUID(player_id), day, UUID(player_id),
                 ),
             ).fetchone()
 
@@ -276,7 +287,8 @@ class GameStore:
     def nearby_groups(self, location: dict[str, float]) -> list[dict[str, Any]]:
         with self.pool.connection() as conn:
             return conn.execute(
-                "SELECT g.id::text AS id, g.title_he, g.description_he, "
+                "SELECT g.id::text AS id, g.title_he, g.description_he, " 
+                "ST_Y(g.center::geometry) AS lat, ST_X(g.center::geometry) AS lon, " 
                 "g.opens_at, g.closes_at, "
                 "(SELECT count(*) FROM group_members mb WHERE mb.challenge_id=g.id) "
                 "AS members, "
@@ -327,3 +339,23 @@ class GameStore:
                     "AND now() BETWEEN g.opens_at AND g.closes_at",
                     (UUID(player_id), group_id),
                 ).fetchone() is not None
+
+    def group_missions(self, player_id: str, group_id: UUID) -> list[dict[str, Any]]:
+        """Read group goals only after the player voluntarily joined."""
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "SELECT " + self._mission_columns() + ", "
+                "(gp.mission_id IS NOT NULL) AS completed_by_group "
+                "FROM group_missions gm "
+                "JOIN missions m ON m.id=gm.mission_id "
+                "JOIN group_challenges g ON g.id=gm.challenge_id "
+                "JOIN group_members mb ON mb.challenge_id=gm.challenge_id "
+                "LEFT JOIN group_progress gp ON gp.challenge_id=gm.challenge_id "
+                "AND gp.mission_id=gm.mission_id "
+                "WHERE gm.challenge_id=%s AND mb.player_id=%s "
+                "AND g.status='published' "
+                "AND now() BETWEEN g.opens_at AND g.closes_at "
+                "AND m.status='approved' AND m.content_tier='free' "
+                "ORDER BY m.slug",
+                (group_id, UUID(player_id)),
+            ).fetchall()

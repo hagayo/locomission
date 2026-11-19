@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
 from uuid import UUID
 
 import redis
@@ -162,6 +161,15 @@ def today_missions(auth: tuple[str, dict] = Depends(identity)):
 def nearby_groups(auth: tuple[str, dict] = Depends(identity)):
     _, session = auth
     return {"groups": app.state.game.nearby_groups(require_location(session))}
+
+
+@app.get("/api/groups/{group_id}/missions")
+def group_missions(group_id: UUID, auth: tuple[str, dict] = Depends(identity)):
+    _, session = auth
+    return {
+        "missions": app.state.game.group_missions(session["player_id"], group_id)
+    }
+
 
 
 @app.post("/api/groups/{group_id}/join")
