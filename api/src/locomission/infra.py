@@ -68,6 +68,16 @@ class Sessions:
     # Independent of session inactivity; a crashed worker cannot retain
     # a mission-wide lock indefinitely while GPS refreshes the session.
     VERIFY_LEASE_MS = 90_000
+    # One minute per Redis GEO bucket; old buckets expire on their own even
+    # if a worker dies. This is NOT the final physical-erasure SLA (X).
+    PRESENCE_BUCKET_SECONDS = 60
+    PRESENCE_INDEX_TTL_SECONDS = INACTIVITY_SECONDS + PRESENCE_BUCKET_SECONDS
+    PRESENCE_RADIUS_M = 1_000
+    PRESENCE_MAX_CANDIDATES = 500
+
+    @staticmethod
+    def presence_key(bucket: int) -> str:
+        return "lm:presence:geo:" + str(bucket)
 
     def create(self, player_id: str) -> str:
         """Replace an existing gameplay session in one Redis transaction.
@@ -82,21 +92,31 @@ class Sessions:
             "player_id": player_id,
             "last_report": time.time(),
             "location": None,
+            "presence_bucket": None,
         }
         self.redis.eval(
             """
             local old = redis.call('GET', KEYS[1])
             if old then
-                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old, ARGV[5] .. old, ARGV[6] .. old)
+                local raw = redis.call('GET', ARGV[3] .. old)
+                if raw then
+                    local ok, data = pcall(cjson.decode, raw)
+                    if ok and type(data) == 'table'
+                          and type(data.presence_bucket) == 'number' then
+                        redis.call('ZREM', ARGV[7] .. tostring(data.presence_bucket), old)
+                    end
+                end
+                redis.call('DEL', ARGV[3] .. old, ARGV[4] .. old,
+                           ARGV[5] .. old, ARGV[6] .. old)
             end
-            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[7])
-            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[7])
+            redis.call('SET', KEYS[2], ARGV[2], 'EX', ARGV[8])
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[8])
             return 1
             """,
             2, self.player_key(player_id), self.session_key(fingerprint),
             fingerprint, json.dumps(data), "lm:session:",
             "lm:proof-fingerprints:", "lm:proof-inflight:",
-            "lm:proof-outcomes:", INACTIVITY_SECONDS,
+            "lm:proof-outcomes:", "lm:presence:geo:", INACTIVITY_SECONDS,
         )
         return token
 
@@ -139,9 +159,13 @@ class Sessions:
                 data["location"], new_location, instant - data["last_report"]
             ):
                 raise SuspiciousLocation("Implausible location jump")
+            previous_bucket = data.get("presence_bucket")
+            bucket = int(instant // self.PRESENCE_BUCKET_SECONDS)
             data["last_report"] = instant
             data["location"] = new_location
-            # All three changes are atomic. No create-after-logout gap.
+            data["presence_bucket"] = bucket
+            # Store only ~100m-grid coordinates in the index, not raw GPS.
+            # Session + owner TTL + GEO movement are one atomic operation.
             result = self.redis.eval(
                 """
                 local old = redis.call('GET', KEYS[1])
@@ -158,12 +182,19 @@ class Sessions:
                 if redis.call('EXISTS', KEYS[5]) == 1 then
                     redis.call('EXPIRE', KEYS[5], ARGV[4])
                 end
+                if KEYS[6] ~= KEYS[7] then
+                    redis.call('ZREM', KEYS[7], ARGV[3])
+                end
+                redis.call('GEOADD', KEYS[6], ARGV[5], ARGV[6], ARGV[3])
+                redis.call('EXPIRE', KEYS[6], ARGV[7])
                 return 1
                 """,
-                5, key, self.player_key(data["player_id"]),
+                7, key, self.player_key(data["player_id"]),
                 self.proof_key(fingerprint), self.verification_key(fingerprint),
-                self.result_key(fingerprint),
+                self.result_key(fingerprint), self.presence_key(bucket),
+                self.presence_key(previous_bucket if previous_bucket is not None else bucket),
                 raw, json.dumps(data), fingerprint, INACTIVITY_SECONDS,
+                round(lon, 3), round(lat, 3), self.PRESENCE_INDEX_TTL_SECONDS,
             )
             return data if result == 1 else None
         except SuspiciousLocation:
@@ -320,59 +351,78 @@ class Sessions:
         )
         return saved == 1
 
-    def active_presence(self, limit: int = 500) -> dict:
-        """Limited pilot map, batching Redis reads instead of two GETs per user.
+    def active_presence(self, viewer_token: str,
+                        location: dict[str, float], limit: int = 500) -> dict:
+        """Nearby anonymous ~100m cells, without a global session scan.
 
-        Each marker is an approximate cell with no player identifiers.
-        No long-lived Redis index is created, so expired sessions disappear.
+        GEOSEARCH reads at most four 60s buckets and validates live session
+        ownership. Old buckets expire even if Redis receives no more traffic.
+        The current player's marker is deliberately omitted.
         """
-        from itertools import islice
-
-        cells: dict[tuple[float, float], int] = {}
-        key_iter = self.redis.scan_iter(match="lm:session:*", count=200)
-        scanned = 0
-        exhausted = False
         limit = max(1, min(limit, 500))
-        while scanned < 10_000:
-            keys = list(islice(key_iter, min(200, 10_000 - scanned)))
-            if not keys:
-                exhausted = True
-                break
-            scanned += len(keys)
-            raws = self.redis.mget(keys)
-            candidates = []
-            now = time.time()
-            for key, raw in zip(keys, raws):
-                if not raw:
-                    continue
-                try:
-                    data = json.loads(raw)
-                    if is_session_expired(data["last_report"], now):
-                        continue
-                    loc = data["location"]
-                    if loc is None:
-                        continue
-                    candidates.append((
-                        key.removeprefix("lm:session:"),
-                        data["player_id"], loc,
-                    ))
-                except (KeyError, TypeError, ValueError):
-                    continue
-            if not candidates:
+        now = time.time()
+        current_bucket = int(now // self.PRESENCE_BUCKET_SECONDS)
+        viewer_digest = self.digest(viewer_token)
+        candidates: dict[str, int] = {}
+        truncated = False
+        for bucket in range(current_bucket, current_bucket - 4, -1):
+            members = self.redis.geosearch(
+                self.presence_key(bucket),
+                longitude=location["lon"], latitude=location["lat"],
+                radius=self.PRESENCE_RADIUS_M + 160, unit="m",
+                count=self.PRESENCE_MAX_CANDIDATES + 1, any=True,
+            )
+            if len(members) > self.PRESENCE_MAX_CANDIDATES:
+                truncated = True
+                members = members[:self.PRESENCE_MAX_CANDIDATES]
+            for digest in members:
+                if digest != viewer_digest:
+                    candidates[digest] = bucket
+        if not candidates:
+            return {"cells": [], "truncated": truncated}
+
+        digests = list(candidates)
+        raw_sessions = self.redis.mget(
+            [self.session_key(digest) for digest in digests]
+        )
+        verified = []
+        for digest, raw in zip(digests, raw_sessions):
+            if not raw:
                 continue
-            owner_keys = [self.player_key(pid) for _, pid, _ in candidates]
-            owners = self.redis.mget(owner_keys)
-            for (fingerprint, _pid, loc), owner in zip(candidates, owners):
-                if owner != fingerprint:
+            try:
+                data = json.loads(raw)
+                if (data.get("presence_bucket") != candidates[digest]
+                        or is_session_expired(data["last_report"], now)
+                        or not data.get("location")):
                     continue
-                cell = (round(loc["lat"], 3), round(loc["lon"], 3))
-                cells[cell] = cells.get(cell, 0) + 1
+                loc = data["location"]
+                if distance_m(
+                    location["lat"], location["lon"], loc["lat"], loc["lon"]
+                ) > self.PRESENCE_RADIUS_M:
+                    continue
+                verified.append((digest, data["player_id"], loc))
+            except (ValueError, TypeError, KeyError):
+                continue
+        if not verified:
+            return {"cells": [], "truncated": truncated}
+
+        owners = self.redis.mget(
+            [self.player_key(player_id) for _, player_id, _ in verified]
+        )
+        cells: dict[tuple[float, float], int] = {}
+        for (digest, _player, loc), owner in zip(verified, owners):
+            if owner != digest:
+                continue
+            cell = (round(loc["lat"], 3), round(loc["lon"], 3))
+            cells[cell] = cells.get(cell, 0) + 1
         values = [
             {"lat": lat, "lon": lon, "players": count}
-            for (lat, lon), count in cells.items()
+            for (lat, lon), count in sorted(cells.items())
         ]
-        return {"cells": values[:limit],
-                "truncated": len(values) > limit or not exhausted}
+        return {
+            "cells": values[:limit],
+            "truncated": truncated or len(values) > limit,
+        }
 
     def end(self, token: str) -> None:
         """Delete session + proof hash and only the matching owner pointer."""
@@ -385,7 +435,9 @@ class Sessions:
             )
             return
         try:
-            player_id = json.loads(raw)["player_id"]
+            data = json.loads(raw)
+            player_id = data["player_id"]
+            bucket = data.get("presence_bucket")
         except (ValueError, TypeError, KeyError):
             self.redis.delete(
                 self.session_key(fingerprint), self.proof_key(fingerprint),
@@ -395,15 +447,19 @@ class Sessions:
         self.redis.eval(
             """
             redis.call('DEL', KEYS[1], KEYS[3], KEYS[4], KEYS[5])
+            if ARGV[2] == '1' then
+                redis.call('ZREM', KEYS[6], ARGV[1])
+            end
             if redis.call('GET', KEYS[2]) == ARGV[1] then
                 redis.call('DEL', KEYS[2])
             end
             return 1
             """,
-            5, self.session_key(fingerprint),
+            6, self.session_key(fingerprint),
             self.player_key(player_id), self.proof_key(fingerprint),
             self.verification_key(fingerprint), self.result_key(fingerprint),
-            fingerprint,
+            self.presence_key(bucket if isinstance(bucket, int) else -1),
+            fingerprint, "1" if isinstance(bucket, int) else "0",
         )
 
 

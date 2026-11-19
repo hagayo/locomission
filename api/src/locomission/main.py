@@ -226,7 +226,8 @@ def leaderboard():
 
 @app.get("/api/presence")
 def presence(auth: tuple[str, dict] = Depends(identity)):
-    return app.state.sessions.active_presence()
+    token, session = auth
+    return app.state.sessions.active_presence(token, require_location(session))
 
 
 @app.patch("/api/me")
@@ -249,7 +250,7 @@ def my_profile(auth: tuple[str, dict] = Depends(identity)):
 @app.get("/api/lobby")
 def lobby(auth: tuple[str, dict] = Depends(identity)):
     """Mobile snapshot: one request for map, assignments, groups and profile."""
-    _, session = auth
+    token, session = auth
     loc = require_location(session)
     player_id = session["player_id"]
     day = challenge_day(utc_now())
@@ -258,7 +259,7 @@ def lobby(auth: tuple[str, dict] = Depends(identity)):
         "missions": app.state.game.today(player_id, day, loc),
         "groups": app.state.game.nearby_groups(loc),
         "profile": app.state.game.profile(player_id),
-        "presence": app.state.sessions.active_presence(),
+        "presence": app.state.sessions.active_presence(token, loc),
     }
 
 
