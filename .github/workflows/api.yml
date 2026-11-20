@@ -124,3 +124,27 @@ jobs:
           grep -q '/locomission/assets/' dist/index.html
           grep -q 'href="./privacy.html"' dist/index.html
           test -f dist/privacy.html
+
+  windows-uv:
+    # Verifies uv.lock and a fresh .venv on Windows. No external services,
+    # credentials, application deployment or gameplay logic changes.
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Create Windows Python 3.12 environment
+        run: |
+          uv python install 3.12
+          uv lock --check
+          uv sync --locked
+      - name: Verify Python imports and Windows unit tests
+        run: |
+          uv run --locked python -c "import fastapi, redis, psycopg, httpx, PIL, clerk_backend_api"
+          uv run --locked python -m pytest -q tests/test_config.py tests/test_domain.py tests/test_clerk_auth.py tests/test_vision.py tests/test_catalog.py tests/test_editorial.py tests/test_live_checks.py tests/test_pilot.py tests/test_uv_tooling.py
