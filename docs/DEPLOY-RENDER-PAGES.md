@@ -62,3 +62,5 @@ Vite Pages: https://vite.dev/guide/static-deploy
 ## Phase 4 - content and pilot gating
 
 For five additional sourced but unapproved mission drafts, use the separate insert-only catalog command described in [docs/PILOT-RELEASE.md](PILOT-RELEASE.md). Do not set `approved` automatically. Real Clerk JWT verification and a potentially billable OpenAI synthetic image smoke test are explicit **operator-only** commands, not CI jobs. The human evidence gate remains blocked until the physical deletion deadline X, safe public photography and all legal/third-party processing decisions are made.
+
+GitHub Pages serves public static assets even in a staging setup. Keep test identities behind Clerk's staging sign-up restrictions, and never embed private operator evidence or credentials in Pages artifacts.

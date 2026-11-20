@@ -89,6 +89,8 @@ def test_atomic_import_never_modifies_edited_or_approved_missions():
             assert import_drafts(test_url, rows) == {
                 "inserted": 5, "unchanged": 0,
             }
+            from locomission.pilot import check_approved_content
+            assert check_approved_content(test_url) == (0, 5)
             assert import_drafts(test_url, rows) == {
                 "inserted": 0, "unchanged": 5,
             }
@@ -120,6 +122,7 @@ def test_atomic_import_never_modifies_edited_or_approved_missions():
                 assert edited == "ידנית נערך"
                 assert approved == ("approved", "Human editor")
                 assert total == 5
+            assert check_approved_content(test_url) == (1, 4)
         finally:
             admin.execute(
                 sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
