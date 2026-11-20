@@ -1,0 +1,37 @@
+# TEMPORARY workflow only for generating a real uv.lock on the migration branch.
+# Remove after the lock file has been generated and verified.
+name: Bootstrap UV lock on migration branch
+on:
+  push:
+    branches: [feat/uv-python-environment]
+    paths:
+      - api/pyproject.toml
+      - api/.python-version
+      - .github/workflows/uv-bootstrap-temporary.yml
+permissions:
+  contents: write
+jobs:
+  generate-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.10.0"
+      - name: Resolve Python 3.12 and lock full dependency graph
+        working-directory: api
+        run: |
+          uv python install 3.12
+          uv lock
+          uv sync --locked
+          uv run --locked python -c "import fastapi, redis, psycopg, httpx, PIL, clerk_backend_api; print('Runtime imports passed')"
+          uv run --locked pytest -q tests/test_config.py tests/test_domain.py tests/test_vision.py
+      - name: Commit generated lock on feature branch only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add api/uv.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(uv): generate verified uv.lock"
+            git push origin HEAD:feat/uv-python-environment
+          fi
