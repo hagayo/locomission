@@ -1,17 +1,20 @@
 # Build from repository root: docker build -t locomission-api .
+# Python dependencies are resolved exclusively from api/uv.lock using uv.
 FROM python:3.12-slim-bookworm AS build
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
-WORKDIR /build/api
-COPY api/pyproject.toml ./
+COPY --from=ghcr.io/astral-sh/uv:0.10.0 /uv /uvx /bin/
+ENV UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+WORKDIR /app
+COPY api/pyproject.toml api/uv.lock api/.python-version ./
 COPY api/src/ ./src/
-RUN python -m pip wheel --wheel-dir /wheels .
+# Package into /app/.venv so virtualenv shebangs remain valid in final image.
+# Exclude dev dependencies and editable source-code paths from production.
+RUN uv sync --locked --no-dev --no-editable --compile-bytecode
 
 FROM python:3.12-slim-bookworm
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PORT=8080
+ENV PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
-COPY --from=build /wheels/ /tmp/wheels/
-RUN python -m pip install --no-index --find-links=/tmp/wheels locomission-api \
-    && rm -rf /tmp/wheels
+COPY --from=build /app/.venv/ /app/.venv/
 COPY db/ /app/db/
 # Numeric unprivileged user; image never contains .env files or API keys.
 USER 10001:10001

@@ -37,25 +37,32 @@ jobs:
         working-directory: api
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v7
         with:
-          python-version: "3.12"
-      - name: Install
-        run: python -m pip install -e ".[test]"
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install Python 3.12 through UV
+        run: uv python install 3.12
+      - name: Verify committed uv.lock and rebuild project .venv
+        run: |
+          uv lock --check
+          uv sync --locked
+          uv tree --locked --depth 1
       - name: Lint Python
-        run: ruff check src tests
+        run: uv run --locked ruff check src tests
       - name: Compile
-        run: python -m compileall -q src
+        run: uv run --locked python -m compileall -q src
       - name: Validate unapproved historical mission catalog
-        run: python -m locomission.catalog --file ../content/tel-aviv-pilot-drafts.json
+        run: uv run --locked python -m locomission.catalog --file ../content/tel-aviv-pilot-drafts.json
       - name: Verify safe operator CLI availability
         run: |
-          python -m locomission.live_checks --help
-          python -m locomission.pilot --help
+          uv run --locked python -m locomission.live_checks --help
+          uv run --locked python -m locomission.pilot --help
       - name: Unit and PostGIS/Redis integration tests
-        run: python -m pytest -q --ignore=tests/test_load.py
+        run: uv run --locked python -m pytest -q --ignore=tests/test_load.py
       - name: Measured Redis load and lease recovery smoke
-        run: python -m pytest -q -s tests/test_load.py
+        run: uv run --locked python -m pytest -q -s tests/test_load.py
       - name: Build API Docker image from repository root
         working-directory: .
         run: docker build --tag locomission-api:ci .
