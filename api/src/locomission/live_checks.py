@@ -102,7 +102,7 @@ def main() -> int:
             verify_clerk_session()
         else:
             verify_openai_vision()
-    except (SmokeBlocked, Exception) as exc:
+    except Exception:
         # Do not print token, provider exception or request payload contents.
         print("FAILED:", "missing configuration or live check error")
         return 1

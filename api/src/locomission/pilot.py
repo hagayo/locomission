@@ -108,7 +108,7 @@ def main() -> int:
         print("Technical release checklist complete. Human launch approval required.")
         return 0
     except (OSError, UnicodeError, json.JSONDecodeError,
-            ReadinessError, psycopg.Error) as exc:
+            ReadinessError, psycopg.Error):
         print("PILOT BLOCKED: invalid or inaccessible release evidence")
         return 2
 
