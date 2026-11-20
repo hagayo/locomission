@@ -143,3 +143,13 @@ Automated tests verify identity isolation, profile persistence across sessions, 
 Global Redis quotas for per-player gameplay requests, SESSION creation and per-player/global OpenAI attempts have configurable, provisional pilot limits in `render.yaml`. Known results are checked before another paid verification attempt. Counters outlive individual game sessions for anti-abuse protection and expire by TTL. See `docs/RESILIENCE.md` for exact defaults and privacy constraints.
 
 The Vite app's Clerk-authenticated HTTP client lives in `mobile/src/apiClient.js`; Node tests cover error status, binary uploads, session headers and refresh. Playwright Chromium tests run realistic browser interactions for GPS permission, mission discovery, simulated camera uploads and interrupted-response recovery. Clerk, OpenAI and the backend are mocked in these browser tests; the actual API is covered separately by PostgreSQL/Redis integration tests. A live-provider device smoke test remains a release gate.
+
+
+## Pilot preparation - Phase 4
+
+- Five additional sourced **draft** missions in `content/tel-aviv-pilot-drafts.json`, with official city source links and clearly approximate coordinates. Nothing is automatically approved or made playable.
+- `python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json` validates offline; add `--apply` with an isolated `DATABASE_URL` only to insert new drafts.
+- Explicit live smoke tools: `python -m locomission.live_checks clerk --confirm-live` and `python -m locomission.live_checks openai --confirm-paid`. Neither runs in CI; the paid test sends only a synthetic image.
+- `python -m locomission.pilot --decisions docs/PILOT-GATES.example.json` reports remaining launch blockers and intentionally fails. It cannot certify a legal privacy policy, safety of real-world sites or the yet-unset erasure period X.
+
+[Hebrew pilot release guide](docs/PILOT-RELEASE.md).

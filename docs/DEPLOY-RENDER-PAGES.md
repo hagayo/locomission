@@ -28,7 +28,7 @@ python -m locomission.migrate --apply
 python -m locomission.migrate --include-drafts --apply
 ```
 
-The third command optionally seeds three historical **drafts**, not approved content. The CLI is also available inside the API Docker image, with SQL files under `/app/db`.
+The fourth command optionally seeds three historical **drafts**, not approved content. The CLI is also available inside the API Docker image, with SQL files under `/app/db`.
 
 An existing database that already has manually applied tables but lacks `schema_migrations` is **not** automatically adopted. The migration tool fails closed. Take a backup and perform an explicit DBA baseline review. Never drop existing user data to bypass this guard.
 
@@ -58,3 +58,7 @@ Reference: https://github.com/hagayo/cinema-city/blob/main/src/cinema/auth/clerk
 Render Blueprint: https://render.com/docs/blueprint-spec
 Clerk JS: https://clerk.com/docs/js-frontend/getting-started/quickstart
 Vite Pages: https://vite.dev/guide/static-deploy
+
+## Phase 4 - content and pilot gating
+
+For five additional sourced but unapproved mission drafts, use the separate insert-only catalog command described in [docs/PILOT-RELEASE.md](PILOT-RELEASE.md). Do not set `approved` automatically. Real Clerk JWT verification and a potentially billable OpenAI synthetic image smoke test are explicit **operator-only** commands, not CI jobs. The human evidence gate remains blocked until the physical deletion deadline X, safe public photography and all legal/third-party processing decisions are made.

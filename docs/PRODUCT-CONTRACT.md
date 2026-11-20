@@ -30,7 +30,7 @@ Session ending triggers immediate *logical invalidation* and an attempt to delet
 
 ### Identity trust boundary
 
-A production identity provider has **not** been selected. All player/session creation is therefore **disabled in non-development mode**. A single explicitly configured UUID is permitted in local development for API exploration. Never accept arbitrary client-submitted player IDs as authentication.
+Clerk has been selected as the identity provider. Outside local test mode, every protected gameplay endpoint requires a cryptographically verified Clerk session JWT and an additional gameplay SESSION stored in Redis. A single explicitly configured UUID is allowed only in local development. The live Clerk tenant and staging origin must still pass a real integration smoke test before public launch.
 
 ## Historical mission contract
 
@@ -47,7 +47,7 @@ Do not award points on OpenAI timeout, model failure, invalid JSON, unapproved m
 
 ## Release blockers
 
-- Real authentication, abuse controls and camera/location permission UX.
+- Live Clerk tenant verification, field-tested camera/GPS permission UX and provider-side spending caps.
 - Session cleanup test under failures and explicit X.
 - Real, sourced and manually approved missions. No invented historical facts in production.
 - Privacy/legal review, minors/consent decisions, third-party processing, deletion requests.

@@ -1,9 +1,9 @@
 name: API checks
 on:
   push:
-    paths: ["api/**", "db/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "content/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
   pull_request:
-    paths: ["api/**", "db/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "content/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
 jobs:
   unit-and-integration:
     runs-on: ubuntu-latest
@@ -46,6 +46,12 @@ jobs:
         run: ruff check src tests
       - name: Compile
         run: python -m compileall -q src
+      - name: Validate unapproved historical mission catalog
+        run: python -m locomission.catalog --file ../content/tel-aviv-pilot-drafts.json
+      - name: Verify safe operator CLI availability
+        run: |
+          python -m locomission.live_checks --help
+          python -m locomission.pilot --help
       - name: Unit and PostGIS/Redis integration tests
         run: python -m pytest -q --ignore=tests/test_load.py
       - name: Measured Redis load and lease recovery smoke
