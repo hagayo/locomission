@@ -67,3 +67,7 @@ def test_production_docker_and_ci_require_exact_uv_lock():
     assert "uv run --locked" in ci
     assert "windows-uv:" in ci
     assert "python -m venv" not in docker
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "**/.venv.*" in dockerignore
+    assert ".venv.*/" in gitignore
