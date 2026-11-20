@@ -38,6 +38,6 @@ Unlike gameplay session presence and proof data, these counters deliberately rem
 
 ## Pilot release review gate (Phase 4)
 
-The CLI `python -m locomission.pilot --decisions docs/PILOT-GATES.example.json` deliberately returns BLOCKED until an operator supplies evidence of age/consent review, a legally reviewed privacy notice, safe public photo sites, live-provider checks, storage/processor retention, log and backup deletion, real-device accessibility and an explicit **X** backed by physical-erasure evidence. It cannot certify legal compliance; a qualified human must review the underlying materials.
+The CLI `uv run --project api --locked python -m locomission.pilot --decisions docs/PILOT-GATES.example.json` deliberately returns BLOCKED until an operator supplies evidence of age/consent review, a legally reviewed privacy notice, safe public photo sites, live-provider checks, storage/processor retention, log and backup deletion, real-device accessibility and an explicit **X** backed by physical-erasure evidence. It cannot certify legal compliance; a qualified human must review the underlying materials.
 
 The OpenAI model smoke test is opt-in and potentially billable, uses a generated graphic with no person/location data, and is not part of CI. Real player photographs are never required for that API-shape test. Staging evaluation with actual site photos additionally needs consent, safe collection and documented processing conditions. The pilot catalog importer is draft-only.

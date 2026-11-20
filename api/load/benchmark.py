@@ -1,8 +1,8 @@
 """Read-only HTTP load probe (stdlib). Never uploads photos or incurs AI costs.
 
 Examples:
-  python -m load.benchmark --url http://127.0.0.1:8000/api/health
-  python -m load.benchmark --url http://127.0.0.1:8000/api/lobby \
+  uv run --locked python -m load.benchmark --url http://127.0.0.1:8000/api/health
+  uv run --locked python -m load.benchmark --url http://127.0.0.1:8000/api/lobby \
       --auth-from-env --workers 12 --requests 240
 
 Do not run against a live/public deployment without explicit --allow-remote.

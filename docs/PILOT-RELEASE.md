@@ -17,27 +17,27 @@
 הרצה מתוך שורש הריפו אחרי התקנת התלויות (אין צורך במסד נתונים לאימות קובץ):
 
 ```sh
-python -m pip install -e ./api
-python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json
+uv sync --project api --locked
+uv run --project api --locked python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json
 ```
 
 טעינת חמש טיוטות ל-PostgreSQL קיים, רק לאחר שהופעלו מיגרציות 001 ו-002 והוגדר `DATABASE_URL` פרטי:
 
 ```sh
-python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json --apply
-python -m locomission.editorial drafts
+uv run --project api --locked python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json --apply
+uv run --project api --locked python -m locomission.editorial drafts
 ```
 
-ייבוא זה אטומי, מאומת סכימה, ו**מוסיף בלבד**. הוא אינו מפרסם ואינו מעדכן טיוטות שנערכו או משימות שאושרו. את שלוש הטיוטות הישנות ניתן לטעון בנפרד דרך `python -m locomission.migrate --include-drafts --apply` לאחר יצירת הסכמה; אין למחוק את קובץ הגרסה הקיים או לשכתב מיגרציה שכבר יושמה.
+ייבוא זה אטומי, מאומת סכימה, ו**מוסיף בלבד**. הוא אינו מפרסם ואינו מעדכן טיוטות שנערכו או משימות שאושרו. את שלוש הטיוטות הישנות ניתן לטעון בנפרד דרך `uv run --project api --locked python -m locomission.migrate --include-drafts --apply` לאחר יצירת הסכמה; אין למחוק את קובץ הגרסה הקיים או לשכתב מיגרציה שכבר יושמה.
 
-**לפני פרסום משימה:** עורך אנושי חייב לקרוא את המקור המקורי, לבדוק את הדיוק ההיסטורי, לקבוע נקודת צילום ציבורית ונגישה, לבחון תאורה ופרטי זיהוי, לאמת מיקום ורדיוס בשטח, ולוודא שאין צורך לחצות כביש, להיכנס לשטח פרטי, לצלם אנשים מזוהים או להסתכן. פקודת האישור הקיימת `python -m locomission.editorial approve ...` דורשת ארבע הצהרות בדיקה ופרטי עורך; אין להפעיל אותה אוטומטית.
+**לפני פרסום משימה:** עורך אנושי חייב לקרוא את המקור המקורי, לבדוק את הדיוק ההיסטורי, לקבוע נקודת צילום ציבורית ונגישה, לבחון תאורה ופרטי זיהוי, לאמת מיקום ורדיוס בשטח, ולוודא שאין צורך לחצות כביש, להיכנס לשטח פרטי, לצלם אנשים מזוהים או להסתכן. פקודת האישור הקיימת `uv run --project api --locked python -m locomission.editorial approve ...` דורשת ארבע הצהרות בדיקה ופרטי עורך; אין להפעיל אותה אוטומטית.
 
 ## 2. בדיקות חיות, רק בסביבת בדיקות
 
 **Clerk:** יש ליצור חשבון בדיקות אמיתי, להגדיר `CLERK_SECRET_KEY`, `CLERK_JWT_KEY` (המפתח הציבורי בפורמט PEM), `CLERK_AUTHORIZED_PARTIES` ולספק `CLERK_SESSION_JWT` תקף דרך משתני סביבה פרטיים. לאחר כיבוי מצב פיתוח:
 
 ```sh
-python -m locomission.live_checks clerk --confirm-live
+uv run --project api --locked python -m locomission.live_checks clerk --confirm-live
 ```
 
 הפקודה בודקת JWT שנחתם בידי Clerk וגם דחייה של טוקן פגום. היא **אינה** מבצעת רישום משתמש, פתיחת SESSION במשחק או בדיקת דפדפן אמיתי; אלה נבדקים לאחר פריסת staging.
@@ -45,7 +45,7 @@ python -m locomission.live_checks clerk --confirm-live
 **OpenAI:** יש להגדיר `OPENAI_API_KEY` בסביבה פרטית:
 
 ```sh
-python -m locomission.live_checks openai --confirm-paid
+uv run --project api --locked python -m locomission.live_checks openai --confirm-paid
 ```
 
 הפקודה שולחת **תמונה סינתטית אחת בלבד** לנתיב האימות הקיים, בתשלום אפשרי, כדי לאמת את פורמט התגובה. אין תמונות שחקנים, מידע מזהה או מיקום GPS. תוצאת המודל יכולה להיות חיובית או שלילית; מטרת בדיקה זו איננה לבחון את דיוק המודל בשטח. את הדיוק בפועל יש לבדוק בנפרד מול צילומים שנאספו בהסכמה באתרים מאושרים.
@@ -57,8 +57,8 @@ python -m locomission.live_checks openai --confirm-paid
 קובץ `docs/PILOT-GATES.example.json` הוא **דוגמה חסומה במתכוון**, ולא אישור משפטי. יש ליצור עותק פרטי מחוץ ל-Git, ובו לכל נושא חתימת בודק, תוצאה ואסמכתה. הבדיקה מצפה גם לנתון `max_physical_erasure_seconds`, שהוא **X שטרם נקבע**. אין להמציא מספר כדי להפוך את הבדיקה לירוקה.
 
 ```sh
-python -m locomission.pilot --decisions docs/PILOT-GATES.example.json
-python -m locomission.pilot --decisions /private/pilot-gates-reviewed.json --check-db
+uv run --project api --locked python -m locomission.pilot --decisions docs/PILOT-GATES.example.json
+uv run --project api --locked python -m locomission.pilot --decisions /private/pilot-gates-reviewed.json --check-db
 ```
 
 הפקודה הראשונה אמורה להסתיים במצב `PILOT BLOCKED`. השנייה בודקת בנוסף את **מספר** המשימות המאושרות ב-PostgreSQL, ללא חשיפת מיקומים או נתוני שחקנים. גם אם כל ההצהרות מלאות, הכלי בודק שלמות אסמכתאות, **לא את נכונות ההצהרות או אישור משפטי עצמאי**.

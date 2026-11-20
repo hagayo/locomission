@@ -35,7 +35,7 @@ local-only test mode still exists solely to run integration tests.
    authorized frontend origins to the API environment.
 4. Apply `db/001_initial.sql` then `db/002_clerk_game.sql` on a fresh
    DB; for existing databases apply only migration 002.
-5. Run `uvicorn locomission.main:app` from `api/`.
+5. Run `uv sync --locked`, then `uv run --locked uvicorn locomission.main:app` from `api/`.
 6. Run `npm install` then `npm run dev` from `mobile/`. Vite proxies
    `/api` to the backend during local development.
 7. Open the Vite URL on a browser with valid HTTPS/secure context for GPS.

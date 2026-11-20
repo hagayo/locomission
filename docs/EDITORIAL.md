@@ -6,7 +6,7 @@ against public access and photography safety before any approval.
 
 From api/ with DATABASE_URL configured, run:
 
-    python -m locomission.editorial drafts
+    uv run --locked python -m locomission.editorial drafts
 
 Only a real human reviewer may approve a mission after:
 - Checking the original source against each historical claim
@@ -16,7 +16,7 @@ Only a real human reviewer may approve a mission after:
 
 An example command structure (NOT executable until placeholders are replaced):
 
-    python -m locomission.editorial approve jaffa-clock-tower --reviewer HUMAN_EDITOR --lat VERIFIED_LAT --lon VERIFIED_LON --radius-m VERIFIED_RADIUS --source-reviewed --hebrew-reviewed --safe-photo-site-reviewed --visual-criteria-reviewed
+    uv run --locked python -m locomission.editorial approve jaffa-clock-tower --reviewer HUMAN_EDITOR --lat VERIFIED_LAT --lon VERIFIED_LON --radius-m VERIFIED_RADIUS --source-reviewed --hebrew-reviewed --safe-photo-site-reviewed --visual-criteria-reviewed
 
 Approval requires the four check flags and verified coordinates. It records
 the actual reviewer's name and UTC timestamp in PostgreSQL. Duplicate
@@ -32,9 +32,9 @@ Five new location-based candidates exist at `content/tel-aviv-pilot-drafts.json`
 From repository root:
 
 ```sh
-python -m pip install -e ./api
-python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json
-python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json --apply
+uv sync --project api --locked
+uv run --project api --locked python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json
+uv run --project api --locked python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json --apply
 ```
 
 The first command validates offline; the second requires `DATABASE_URL` and inserts only new **draft** rows. It never modifies any existing slug, including reviewed or approved missions. Missing/duplicated JSON fields, non-Hebrew copy, unsafe/incomplete criteria, invalid source URLs and coordinates are rejected before database writes. Check every fact and field condition manually before using the existing `approve` command. See `docs/PILOT-RELEASE.md`.

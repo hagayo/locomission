@@ -22,10 +22,10 @@ This repository is prepared for deployment, but no live service or DNS has been 
 On a *fresh, empty* PostgreSQL instance with PostGIS available, run migration planning followed by explicit apply from the repository root, using a private `DATABASE_URL`:
 
 ```sh
-python -m pip install -e ./api
-python -m locomission.migrate
-python -m locomission.migrate --apply
-python -m locomission.migrate --include-drafts --apply
+uv sync --project api --locked
+uv run --project api --locked python -m locomission.migrate
+uv run --project api --locked python -m locomission.migrate --apply
+uv run --project api --locked python -m locomission.migrate --include-drafts --apply
 ```
 
 The fourth command optionally seeds three historical **drafts**, not approved content. The CLI is also available inside the API Docker image, with SQL files under `/app/db`.

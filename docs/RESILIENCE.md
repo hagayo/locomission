@@ -76,7 +76,7 @@ For concurrent Redis presence/session operations, from `api/` with the
 isolated `LOCOMISSION_TEST_DATABASE_URL` and `REDIS_URL` configured:
 
 ```bash
-python -m pytest -q -s tests/test_load.py
+uv run --locked python -m pytest -q -s tests/test_load.py
 ```
 
 It creates 80 synthetic sessions, issues 80 location reports, 600 concurrent
@@ -88,7 +88,7 @@ calls. It must run only against an isolated Redis instance.
 For read-only HTTP load benchmarking from `api/`:
 
 ```bash
-python -m load.benchmark --url http://127.0.0.1:8000/api/health \
+uv run --locked python -m load.benchmark --url http://127.0.0.1:8000/api/health \
   --workers 12 --requests 240
 ```
 

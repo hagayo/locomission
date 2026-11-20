@@ -21,10 +21,10 @@ Design and decisions: [product contract](docs/PRODUCT-CONTRACT.md), [mobile UX](
 Requires Python 3.12+, PostgreSQL with PostGIS, and Redis. Do not expose the development identity mode publicly.
 
 1. Create database and apply `db/001_initial.sql` once, e.g. `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/001_initial.sql`.
-2. `cd api && python -m venv .venv`, activate it, then `pip install -e ".[test]"`.
+2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run `cd api && uv sync --locked`. This creates `api/.venv` with Python 3.12 from `.python-version`; manual activation is unnecessary.
 3. Copy `api/.env.example` to a private local environment configuration and export those variables to the process. Set `LOCOMISSION_DEV_MODE=true` and `LOCOMISSION_DEV_PLAYER_ID` to a newly generated UUID (only locally).
-4. Start `uvicorn locomission.main:app --reload` from `api/`. The server documents its endpoints at `/docs`.
-5. `pytest` runs automated unit tests and PostGIS/Redis integration checks; live OpenAI calls are not made in CI.
+4. Start `uv run --locked uvicorn locomission.main:app --reload` from `api/`. The server documents its endpoints at `/docs`.
+5. `uv run --locked pytest` runs automated unit tests and PostGIS/Redis integration checks; live OpenAI calls are not made in CI.
 
 `OPENAI_API_KEY` is required for actual visual grading. No live model call is made without it. **No historical missions are seeded automatically:** source-supported, human-reviewed content must be added before playable results appear.
 
@@ -148,8 +148,20 @@ The Vite app's Clerk-authenticated HTTP client lives in `mobile/src/apiClient.js
 ## Pilot preparation - Phase 4
 
 - Five additional sourced **draft** missions in `content/tel-aviv-pilot-drafts.json`, with official city source links and clearly approximate coordinates. Nothing is automatically approved or made playable.
-- `python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json` validates offline; add `--apply` with an isolated `DATABASE_URL` only to insert new drafts.
-- Explicit live smoke tools: `python -m locomission.live_checks clerk --confirm-live` and `python -m locomission.live_checks openai --confirm-paid`. Neither runs in CI; the paid test sends only a synthetic image.
-- `python -m locomission.pilot --decisions docs/PILOT-GATES.example.json` reports remaining launch blockers and intentionally fails. It cannot certify a legal privacy policy, safety of real-world sites or the yet-unset erasure period X.
+- `uv run --project api --locked python -m locomission.catalog --file content/tel-aviv-pilot-drafts.json` validates offline; add `--apply` with an isolated `DATABASE_URL` only to insert new drafts.
+- Explicit live smoke tools: `uv run --project api --locked python -m locomission.live_checks clerk --confirm-live` and `uv run --project api --locked python -m locomission.live_checks openai --confirm-paid`. Neither runs in CI; the paid test sends only a synthetic image.
+- `uv run --project api --locked python -m locomission.pilot --decisions docs/PILOT-GATES.example.json` reports remaining launch blockers and intentionally fails. It cannot certify a legal privacy policy, safety of real-world sites or the yet-unset erasure period X.
 
 [Hebrew pilot release guide](docs/PILOT-RELEASE.md).
+
+## Python environment management (UV)
+
+All Python dependency management uses **uv**, with `api/pyproject.toml`,
+`api/uv.lock` and `api/.python-version` as its declared source of truth.
+Local `api/.venv/` is generated, ignored by Git and never committed.
+The existing Node/Vite client continues to use `mobile/package-lock.json`
+and npm; it is not part of the Python virtual environment.
+
+To migrate an older Python environment safely on Windows, see
+[docs/UV-MIGRATION.md](docs/UV-MIGRATION.md). Do not delete the old
+`.venv` before confirming that `uv sync --locked` and tests succeed.
