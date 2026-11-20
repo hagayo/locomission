@@ -1,0 +1,55 @@
+{
+  "max_physical_erasure_seconds": null,
+  "decisions": {
+    "editorial_source_and_field_review": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "safe_public_photography": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "age_gate_and_minors_policy": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "clerk_real_tenant_smoke": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "openai_real_provider_smoke": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "privacy_notice_and_legal_review": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "processor_and_data_retention_review": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "physical_deletion_and_backups": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "on_device_gps_and_camera_permissions": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    },
+    "security_cost_monitoring_and_restore": {
+      "approved": false,
+      "reviewer": "",
+      "evidence": ""
+    }
+  }
+}
