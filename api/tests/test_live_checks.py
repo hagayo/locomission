@@ -23,6 +23,7 @@ def test_clerk_smoke_fails_without_live_credentials(monkeypatch):
 
 
 def test_live_clerk_requires_signed_token_and_rejects_bad_token(monkeypatch):
+    monkeypatch.setenv("LOCOMISSION_DEV_MODE", "false")
     monkeypatch.setenv("CLERK_SESSION_JWT", "test.verified.jwt")
     monkeypatch.setenv("CLERK_SECRET_KEY", "sk_test_test")
     monkeypatch.setenv("CLERK_JWT_KEY", "public-pem")
