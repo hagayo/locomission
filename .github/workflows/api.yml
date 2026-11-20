@@ -1,9 +1,9 @@
 name: API checks
 on:
   push:
-    paths: ["api/**", "db/**", "content/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "content/**", "docs/**", "mobile/**", "README.md", "Dockerfile", ".dockerignore", ".gitignore", "render.yaml", ".github/workflows/*.yml"]
   pull_request:
-    paths: ["api/**", "db/**", "content/**", "mobile/**", "Dockerfile", ".dockerignore", "render.yaml", ".github/workflows/api.yml"]
+    paths: ["api/**", "db/**", "content/**", "docs/**", "mobile/**", "README.md", "Dockerfile", ".dockerignore", ".gitignore", "render.yaml", ".github/workflows/*.yml"]
 jobs:
   unit-and-integration:
     runs-on: ubuntu-latest
